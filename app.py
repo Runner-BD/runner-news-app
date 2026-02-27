@@ -2,17 +2,26 @@ import os
 import sqlite3
 import hashlib
 import feedparser
+
 from flask import Flask, render_template_string, request, redirect
 from openai import OpenAI
 
 # -----------------------
-# APP SETUP
+# APP CONFIG
 # -----------------------
 app = Flask(__name__)
 DB_NAME = "runner.db"
 
-# OpenAI client
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# -----------------------
+# OPENAI SAFE INIT
+# -----------------------
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+if OPENAI_API_KEY:
+    client = OpenAI(api_key=OPENAI_API_KEY)
+else:
+    client = None
+    print("WARNING: OPENAI_API_KEY not found")
 
 # -----------------------
 # DATABASE SETUP
@@ -108,7 +117,6 @@ HTML_PAGE = """
     {% endif %}
 
 </div>
-
 </body>
 </html>
 """
@@ -152,27 +160,34 @@ def save_headline(headline_hash):
         pass
     conn.close()
 
+# -----------------------
+# AI SUMMARY (SAFE)
+# -----------------------
 def generate_bangla_summary(title):
+    if not client:
+        return "⚠️ OPENAI_API_KEY not configured."
+
     try:
         prompt = f"""
 সংবাদ শিরোনাম: {title}
 
 নির্দেশনা:
-- 2-3 লাইনের সংক্ষিপ্ত বাংলা সারাংশ লিখুন
-- নিরপেক্ষ ভাষা ব্যবহার করুন
+- 650 থেকে 900 অক্ষরের মধ্যে বাংলায় সংবাদ সারাংশ লিখুন
+- নিরপেক্ষ ও পেশাদার ভাষা ব্যবহার করুন
+- কোনো নেতিবাচক শব্দ ব্যবহার করবেন না
 """
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
-            max_tokens=120,
+            max_tokens=500,
         )
 
         return response.choices[0].message.content.strip()
 
     except Exception as e:
-        print("OpenAI error:", e)
+        print("OPENAI ERROR:", e)
         return "সারাংশ তৈরি করা যায়নি।"
 
 # -----------------------
@@ -208,11 +223,7 @@ def fetch_news():
         rss_url = src[1]
         keywords = src[2]
 
-        try:
-            feed = feedparser.parse(rss_url)
-        except Exception as e:
-            print("RSS error:", e)
-            continue
+        feed = feedparser.parse(rss_url)
 
         for entry in feed.entries[:10]:
             title = entry.title
