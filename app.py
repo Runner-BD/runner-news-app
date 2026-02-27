@@ -216,6 +216,7 @@ def add_source():
 @app.route("/fetch", methods=["POST"])
 def fetch_news():
     sources = get_sources()
+    all_news = []
 
     for src in sources:
         rss_url = src[1]
@@ -235,22 +236,18 @@ def fetch_news():
                 summary = generate_bangla_summary(title)
                 save_headline(headline_hash)
 
-                news = {
+                news_item = {
                     "heading": title,
                     "body": summary,
                     "link": entry.link
                 }
 
-                return render_template_string(
-                    HTML_PAGE,
-                    sources=sources,
-                    news=news
-                )
+                all_news.append(news_item)
 
     return render_template_string(
         HTML_PAGE,
         sources=sources,
-        news=None
+        news=all_news
     )
 
 # -----------------------
@@ -258,4 +255,5 @@ def fetch_news():
 # -----------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
