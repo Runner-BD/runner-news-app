@@ -1,39 +1,13 @@
-from openai import OpenAI
 import os
-
-client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-
-def summarize_news(title, content):
-    try:
-        prompt = f"""
-        Summarize the following news in simple Bengali in 2–3 lines.
-
-        Title: {title}
-        Content: {content}
-        """
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=120,
-        )
-
-        return response.choices[0].message.content.strip()
-
-    except Exception as e:
-        print("OpenAI error:", e)
-        return "Summary unavailable"
-
-
-from flask import Flask, render_template_string, request, redirect
 import sqlite3
 import hashlib
 import feedparser
-import os
+from flask import Flask, render_template_string, request, redirect
 from openai import OpenAI
 
+# -----------------------
+# APP SETUP
+# -----------------------
 app = Flask(__name__)
 DB_NAME = "runner.db"
 
@@ -134,6 +108,7 @@ HTML_PAGE = """
     {% endif %}
 
 </div>
+
 </body>
 </html>
 """
@@ -178,23 +153,27 @@ def save_headline(headline_hash):
     conn.close()
 
 def generate_bangla_summary(title):
-    prompt = f"""
+    try:
+        prompt = f"""
 সংবাদ শিরোনাম: {title}
 
 নির্দেশনা:
-- 650 থেকে 900 অক্ষরের মধ্যে বাংলায় সংবাদ সারাংশ লিখুন
-- নিরপেক্ষ ও পেশাদার ভাষা ব্যবহার করুন
-- কোনো নেতিবাচক বা আক্রমণাত্মক শব্দ ব্যবহার করবেন না
-- সংক্ষিপ্ত ও পরিষ্কার রাখুন
+- 2-3 লাইনের সংক্ষিপ্ত বাংলা সারাংশ লিখুন
+- নিরপেক্ষ ভাষা ব্যবহার করুন
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.4,
-    )
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.4,
+            max_tokens=120,
+        )
 
-    return response.choices[0].message.content.strip()
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        print("OpenAI error:", e)
+        return "সারাংশ তৈরি করা যায়নি।"
 
 # -----------------------
 # ROUTES
@@ -229,7 +208,11 @@ def fetch_news():
         rss_url = src[1]
         keywords = src[2]
 
-        feed = feedparser.parse(rss_url)
+        try:
+            feed = feedparser.parse(rss_url)
+        except Exception as e:
+            print("RSS error:", e)
+            continue
 
         for entry in feed.entries[:10]:
             title = entry.title
@@ -262,6 +245,3 @@ def fetch_news():
 # -----------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
-
-
