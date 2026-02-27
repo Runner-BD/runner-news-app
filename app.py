@@ -1,3 +1,32 @@
+from openai import OpenAI
+import os
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+
+def summarize_news(title, content):
+    try:
+        prompt = f"""
+        Summarize the following news in simple Bengali in 2–3 lines.
+
+        Title: {title}
+        Content: {content}
+        """
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=120,
+        )
+
+        return response.choices[0].message.content.strip()
+
+    except Exception as e:
+        print("OpenAI error:", e)
+        return "Summary unavailable"
+
+
 from flask import Flask, render_template_string, request, redirect
 import sqlite3
 import hashlib
@@ -229,3 +258,4 @@ def fetch_news():
 # -----------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
