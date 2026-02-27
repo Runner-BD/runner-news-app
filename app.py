@@ -1,6 +1,7 @@
 from flask import Flask, render_template_string, request, redirect
 import sqlite3
 import hashlib
+import feedparser
 
 app = Flask(__name__)
 DB_NAME = "runner.db"
@@ -12,7 +13,6 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
-    # Sources table
     c.execute("""
     CREATE TABLE IF NOT EXISTS sources (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -21,7 +21,6 @@ def init_db():
     )
     """)
 
-    # News history (for future dedup)
     c.execute("""
     CREATE TABLE IF NOT EXISTS news_history (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -54,9 +53,9 @@ HTML_PAGE = """
 <h1>🏃 Runner News Dashboard</h1>
 
 <div class="box">
-    <h3>Add News Source</h3>
+    <h3>Add RSS Source</h3>
     <form method="post" action="/add_source">
-        <label>Source URL:</label>
+        <label>RSS URL:</label>
         <input name="url" required>
 
         <label>Keywords (comma separated):</label>
@@ -76,7 +75,7 @@ HTML_PAGE = """
 </div>
 
 <div class="box">
-    <h3>Fetch News (Demo)</h3>
+    <h3>Fetch News</h3>
     <form method="post" action="/fetch">
         <button type="submit">Fetch News</button>
     </form>
@@ -84,12 +83,11 @@ HTML_PAGE = """
 
 {% if news %}
 <div class="box">
-    <h3>Generated News</h3>
-    <p><b>Heading:</b> {{news.heading}}</p>
-    <p>{{news.body}}</p>
+    <h3>Matched News</h3>
+    <p><b>Headline:</b> {{news.heading}}</p>
+    <p><a href="{{news.link}}" target="_blank">Open Source</a></p>
 
     <button>Approve</button>
-    <button>Edit</button>
     <button>Cancel</button>
 </div>
 {% endif %}
@@ -108,6 +106,13 @@ def get_sources():
     rows = c.fetchall()
     conn.close()
     return rows
+
+def keyword_match(title, keywords):
+    title_lower = title.lower()
+    for kw in keywords.split(","):
+        if kw.strip().lower() in title_lower:
+            return True
+    return False
 
 # -----------------------
 # ROUTES
@@ -135,19 +140,36 @@ def add_source():
 
 @app.route("/fetch", methods=["POST"])
 def fetch_news():
-    # DEMO news (real scraping later)
-    headline = "বাংলাদেশে নতুন অর্থনৈতিক অগ্রগতি"
-
-    # create hash for future dedup
-    headline_hash = hashlib.md5(headline.encode()).hexdigest()
-
-    demo_news = {
-        "heading": headline,
-        "body": "বাংলাদেশের অর্থনীতি সাম্প্রতিক সময়ে উল্লেখযোগ্য উন্নতি অর্জন করেছে। বিভিন্ন খাতে প্রবৃদ্ধি বৃদ্ধি পেয়েছে এবং বিশেষজ্ঞরা আশা করছেন এই ধারা অব্যাহত থাকবে।"
-    }
-
     sources = get_sources()
-    return render_template_string(HTML_PAGE, sources=sources, news=demo_news)
+
+    for src in sources:
+        rss_url = src[1]
+        keywords = src[2]
+
+        feed = feedparser.parse(rss_url)
+
+        for entry in feed.entries[:10]:
+            title = entry.title
+
+            if keyword_match(title, keywords):
+                headline_hash = hashlib.md5(title.encode()).hexdigest()
+
+                news = {
+                    "heading": title,
+                    "link": entry.link
+                }
+
+                return render_template_string(
+                    HTML_PAGE,
+                    sources=sources,
+                    news=news
+                )
+
+    return render_template_string(
+        HTML_PAGE,
+        sources=sources,
+        news=None
+    )
 
 # -----------------------
 # MAIN
