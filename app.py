@@ -2,9 +2,14 @@ from flask import Flask, render_template_string, request, redirect
 import sqlite3
 import hashlib
 import feedparser
+import os
+from openai import OpenAI
 
 app = Flask(__name__)
 DB_NAME = "runner.db"
+
+# OpenAI client
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 # -----------------------
 # DATABASE SETUP
@@ -83,8 +88,9 @@ HTML_PAGE = """
 
 {% if news %}
 <div class="box">
-    <h3>Matched News</h3>
-    <p><b>Headline:</b> {{news.heading}}</p>
+    <h3>Generated Bangla News</h3>
+    <p><b>Heading:</b> {{news.heading}}</p>
+    <p>{{news.body}}</p>
     <p><a href="{{news.link}}" target="_blank">Open Source</a></p>
 
     <button>Approve</button>
@@ -113,6 +119,46 @@ def keyword_match(title, keywords):
         if kw.strip().lower() in title_lower:
             return True
     return False
+
+def is_duplicate(headline_hash):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT 1 FROM news_history WHERE headline_hash=?", (headline_hash,))
+    exists = c.fetchone()
+    conn.close()
+    return exists is not None
+
+def save_headline(headline_hash):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    try:
+        c.execute(
+            "INSERT INTO news_history (headline_hash) VALUES (?)",
+            (headline_hash,)
+        )
+        conn.commit()
+    except:
+        pass
+    conn.close()
+
+def generate_bangla_summary(title):
+    prompt = f"""
+সংবাদ শিরোনাম: {title}
+
+নির্দেশনা:
+- 650 থেকে 900 অক্ষরের মধ্যে বাংলায় সংবাদ সারাংশ লিখুন
+- নিরপেক্ষ ও পেশাদার ভাষা ব্যবহার করুন
+- কোনো নেতিবাচক বা আক্রমণাত্মক শব্দ ব্যবহার করবেন না
+- সংক্ষিপ্ত ও পরিষ্কার রাখুন
+"""
+
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.4,
+    )
+
+    return response.choices[0].message.content.strip()
 
 # -----------------------
 # ROUTES
@@ -154,8 +200,15 @@ def fetch_news():
             if keyword_match(title, keywords):
                 headline_hash = hashlib.md5(title.encode()).hexdigest()
 
+                if is_duplicate(headline_hash):
+                    continue
+
+                summary = generate_bangla_summary(title)
+                save_headline(headline_hash)
+
                 news = {
                     "heading": title,
+                    "body": summary,
                     "link": entry.link
                 }
 
