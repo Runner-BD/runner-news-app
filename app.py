@@ -115,18 +115,25 @@ HTML_PAGE = """
     </form>
 </div>
 
-{% if news %}
 <div class="box">
     <h3>Generated Bangla News</h3>
-    <p><b>Heading:</b> {{news.heading}}</p>
-    <p>{{news.body}}</p>
-    <p><a href="{{news.link}}" target="_blank">Open Source</a></p>
 
-    <button>Approve</button>
-    <button>Cancel</button>
+    {% if news %}
+        {% for item in news %}
+            <div style="margin-bottom:15px; padding:10px; border:1px solid #ddd;">
+                <p><b>Heading:</b> {{item.heading}}</p>
+                <p>{{item.body}}</p>
+                <p><a href="{{item.link}}" target="_blank">Open Source</a></p>
+
+                <button>Approve</button>
+                <button>Cancel</button>
+            </div>
+        {% endfor %}
+    {% else %}
+        <p>No news found.</p>
+    {% endif %}
+
 </div>
-{% endif %}
-
 </body>
 </html>
 """
@@ -255,5 +262,6 @@ def fetch_news():
 # -----------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
 
