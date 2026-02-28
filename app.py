@@ -187,8 +187,8 @@ def generate_bangla_summary(title):
         return response.choices[0].message.content.strip()
 
     except Exception as e:
-        print("OPENAI ERROR:", e)
-        return "সারাংশ তৈরি করা যায়নি।"
+    print("OPENAI ERROR:", str(e))
+    return f"OPENAI ERROR: {str(e)}"
 
 # -----------------------
 # ROUTES
@@ -256,3 +256,4 @@ def fetch_news():
 # -----------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
