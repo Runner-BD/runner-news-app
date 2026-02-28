@@ -17,11 +17,15 @@ DB_NAME = "runner.db"
 # -----------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
+client = None
 if OPENAI_API_KEY:
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        print("✅ OpenAI client initialized")
+    except Exception as e:
+        print("❌ OpenAI init failed:", e)
 else:
-    client = None
-    print("WARNING: OPENAI_API_KEY not found")
+    print("⚠️ OPENAI_API_KEY not found")
 
 # -----------------------
 # DATABASE SETUP
@@ -107,16 +111,13 @@ HTML_PAGE = """
                 <p><b>Heading:</b> {{item.heading}}</p>
                 <p>{{item.body}}</p>
                 <p><a href="{{item.link}}" target="_blank">Open Source</a></p>
-
-                <button>Approve</button>
-                <button>Cancel</button>
             </div>
         {% endfor %}
     {% else %}
         <p>No news found.</p>
     {% endif %}
-
 </div>
+
 </body>
 </html>
 """
@@ -132,6 +133,7 @@ def get_sources():
     conn.close()
     return rows
 
+
 def keyword_match(title, keywords):
     title_lower = title.lower()
     for kw in keywords.split(","):
@@ -139,13 +141,18 @@ def keyword_match(title, keywords):
             return True
     return False
 
+
 def is_duplicate(headline_hash):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT 1 FROM news_history WHERE headline_hash=?", (headline_hash,))
+    c.execute(
+        "SELECT 1 FROM news_history WHERE headline_hash=?",
+        (headline_hash,)
+    )
     exists = c.fetchone()
     conn.close()
     return exists is not None
+
 
 def save_headline(headline_hash):
     conn = sqlite3.connect(DB_NAME)
@@ -156,25 +163,24 @@ def save_headline(headline_hash):
             (headline_hash,)
         )
         conn.commit()
-    except:
-        pass
+    except Exception as e:
+        print("DB save error:", e)
     conn.close()
 
+
 # -----------------------
-# AI SUMMARY (SAFE)
+# AI SUMMARY (VERY SAFE)
 # -----------------------
 def generate_bangla_summary(title):
     if not client:
-        return "OPENAI ERROR: API key not configured"
+        return "⚠️ OpenAI not configured."
 
     try:
         prompt = f"""
 সংবাদ শিরোনাম: {title}
 
-নির্দেশনা:
-- 650 থেকে 900 অক্ষরের মধ্যে বাংলায় সংবাদ সারাংশ লিখুন
-- নিরপেক্ষ ও পেশাদার ভাষা ব্যবহার করুন
-- কোনো নেতিবাচক শব্দ ব্যবহার করবেন না
+৬৫০–৯০০ অক্ষরের একটি সংক্ষিপ্ত বাংলা সংবাদ সারাংশ লিখুন।
+নিরপেক্ষ ও পেশাদার ভাষা ব্যবহার করুন।
 """
 
         response = client.chat.completions.create(
@@ -184,23 +190,34 @@ def generate_bangla_summary(title):
             max_tokens=500,
         )
 
-        return response.choices[0].message.content.strip()
+        text = response.choices[0].message.content.strip()
+
+        if not text:
+            return "সারাংশ তৈরি করা যায়নি।"
+
+        return text
 
     except Exception as e:
-        error_text = str(e)
-        print("OPENAI ERROR:", error_text)
-        return f"OPENAI ERROR: {error_text}"
+        print("❌ OPENAI ERROR:", e)
+        return "সারাংশ তৈরি করা যায়নি।"
 
+
+# -----------------------
+# ROUTES
 # -----------------------
 @app.route("/")
 def home():
     sources = get_sources()
     return render_template_string(HTML_PAGE, sources=sources, news=None)
 
+
 @app.route("/add_source", methods=["POST"])
 def add_source():
     url = request.form.get("url")
     keywords = request.form.get("keywords")
+
+    if not url or not keywords:
+        return redirect("/")
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -213,21 +230,32 @@ def add_source():
 
     return redirect("/")
 
+
 @app.route("/fetch", methods=["POST"])
 def fetch_news():
     sources = get_sources()
     all_news = []
 
-    for src in sources:
-        rss_url = src[1]
-        keywords = src[2]
+    try:
+        for src in sources:
+            rss_url = src[1]
+            keywords = src[2]
 
-        feed = feedparser.parse(rss_url)
+            feed = feedparser.parse(rss_url)
 
-        for entry in feed.entries[:10]:
-            title = entry.title
+            if not feed.entries:
+                continue
 
-            if keyword_match(title, keywords):
+            for entry in feed.entries[:10]:
+                title = entry.get("title", "")
+                link = entry.get("link", "#")
+
+                if not title:
+                    continue
+
+                if not keyword_match(title, keywords):
+                    continue
+
                 headline_hash = hashlib.md5(title.encode()).hexdigest()
 
                 if is_duplicate(headline_hash):
@@ -236,13 +264,14 @@ def fetch_news():
                 summary = generate_bangla_summary(title)
                 save_headline(headline_hash)
 
-                news_item = {
+                all_news.append({
                     "heading": title,
                     "body": summary,
-                    "link": entry.link
-                }
+                    "link": link
+                })
 
-                all_news.append(news_item)
+    except Exception as e:
+        print("❌ FETCH ERROR:", e)
 
     return render_template_string(
         HTML_PAGE,
@@ -250,10 +279,9 @@ def fetch_news():
         news=all_news
     )
 
+
 # -----------------------
 # MAIN
 # -----------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
-
-
