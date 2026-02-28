@@ -173,34 +173,30 @@ def save_headline(headline_hash):
 # -----------------------
 def generate_bangla_summary(title):
     if not client:
-        return "⚠️ OpenAI not configured."
+        return "OPENAI ERROR: API key missing on server"
 
     try:
         prompt = f"""
 সংবাদ শিরোনাম: {title}
 
-৬৫০–৯০০ অক্ষরের একটি সংক্ষিপ্ত বাংলা সংবাদ সারাংশ লিখুন।
-নিরপেক্ষ ও পেশাদার ভাষা ব্যবহার করুন।
+নির্দেশনা:
+- সহজ বাংলায় ২-৩ লাইনের সংবাদ সারাংশ লিখুন
+- নিরপেক্ষ ভাষা ব্যবহার করুন
 """
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
-            max_tokens=500,
+            max_tokens=200,
         )
 
-        text = response.choices[0].message.content.strip()
-
-        if not text:
-            return "সারাংশ তৈরি করা যায়নি।"
-
-        return text
+        return response.choices[0].message.content.strip()
 
     except Exception as e:
-        print("❌ OPENAI ERROR:", e)
-        return "সারাংশ তৈরি করা যায়নি।"
-
+        error_text = str(e)
+        print("OPENAI ERROR:", error_text)
+        return f"OPENAI ERROR: {error_text}"
 
 # -----------------------
 # ROUTES
@@ -285,3 +281,4 @@ def fetch_news():
 # -----------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
