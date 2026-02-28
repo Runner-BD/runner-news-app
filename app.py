@@ -297,7 +297,7 @@ def add_source():
 
     return redirect("/")
 
-
+# -----------------------
 @app.route("/fetch", methods=["POST"])
 def fetch_news():
     sources = get_sources()
@@ -314,37 +314,37 @@ def fetch_news():
                 continue
 
             for entry in feed.entries[:10]:
-    title = entry.get("title", "")
-    link = entry.get("link", "#")
+                title = entry.get("title", "")
+                link = entry.get("link", "#")
 
-    # 🔹 get description safely
-    description = ""
-    if hasattr(entry, "summary"):
-        description = entry.summary
-    elif hasattr(entry, "description"):
-        description = entry.description
+                # 🔹 get description safely
+                description = ""
+                if hasattr(entry, "summary"):
+                    description = entry.summary
+                elif hasattr(entry, "description"):
+                    description = entry.description
 
-    if not title:
-        continue
+                if not title:
+                    continue
 
-    if not keyword_match(title, keywords):
-        continue
+                if not keyword_match(title, keywords):
+                    continue
 
-    headline_hash = hashlib.md5(title.encode()).hexdigest()
+                headline_hash = hashlib.md5(title.encode()).hexdigest()
 
-    if is_duplicate(headline_hash):
-        continue
+                if is_duplicate(headline_hash):
+                    continue
 
-    # 🔹 send title + description
-    summary = generate_bangla_summary(title, description)
+                # 🔹 send title + description
+                summary = generate_bangla_summary(title, description)
 
-    save_headline(headline_hash)
+                save_headline(headline_hash)
 
-    all_news.append({
-        "heading": title,
-        "body": summary,
-        "link": link
-    })
+                all_news.append({
+                    "heading": title,
+                    "body": summary,
+                    "link": link
+                })
 
     except Exception as e:
         print("❌ FETCH ERROR:", e)
@@ -355,13 +355,13 @@ def fetch_news():
         news=all_news
     )
 
-
 # -----------------------
 # MAIN
 # -----------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
