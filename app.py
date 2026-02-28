@@ -327,18 +327,21 @@ def fetch_news():
                 if not title:
                     continue
 
-              #  if not keyword_match(title, keywords):
-              #      continue
+                # 🔹 TEMP: keyword filter disabled
+                # if not keyword_match(title, keywords):
+                #     continue
 
                 headline_hash = hashlib.md5(title.encode()).hexdigest()
 
-                if is_duplicate(headline_hash):
-                    continue
+                # 🔹 TEMP: duplicate check disabled
+                # if is_duplicate(headline_hash):
+                #     continue
 
-                # 🔹 send title + description
+                # 🔹 generate summary
                 summary = generate_bangla_summary(title, description)
 
-                save_headline(headline_hash)
+                # 🔹 TEMP: history save disabled
+                # save_headline(headline_hash)
 
                 all_news.append({
                     "heading": title,
@@ -355,15 +358,13 @@ def fetch_news():
         news=all_news
     )
 
+
 # -----------------------
 # MAIN
 # -----------------------
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
-
-
 
 
 
