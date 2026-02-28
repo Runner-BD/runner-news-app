@@ -28,6 +28,32 @@ def free_smart_summary(title):
         summary = summary[:120] + "..."
 
     return f"সংক্ষিপ্ত সংবাদ: {summary}"
+def generate_bangla_summary(title, description=""):
+    if not client:
+        return free_smart_summary(title)
+
+    try:
+        content_text = f"শিরোনাম: {title}\nবিস্তারিত: {description}"
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": content_text}],
+            temperature=0.4,
+            max_tokens=500,
+        )
+
+        text = response.choices[0].message.content.strip()
+
+        if not text:
+            return free_smart_summary(title)
+
+        return text
+
+    except Exception as e:
+        print("❌ OPENAI ERROR:", e)
+        return free_smart_summary(title)
+
+
 # -----------------------
 import os
 import sqlite3
@@ -291,33 +317,34 @@ def fetch_news():
     title = entry.get("title", "")
     link = entry.get("link", "#")
 
-    # ✅ NEW — get full news text from RSS
+    # 🔹 get description safely
     description = ""
-
     if hasattr(entry, "summary"):
         description = entry.summary
     elif hasattr(entry, "description"):
         description = entry.description
-        
-                if not title:
-                    continue
 
-                if not keyword_match(title, keywords):
-                    continue
+    if not title:
+        continue
 
-                headline_hash = hashlib.md5(title.encode()).hexdigest()
+    if not keyword_match(title, keywords):
+        continue
 
-                if is_duplicate(headline_hash):
-                    continue
+    headline_hash = hashlib.md5(title.encode()).hexdigest()
 
-                summary = generate_bangla_summary(title + " " + description)
-                save_headline(headline_hash)
+    if is_duplicate(headline_hash):
+        continue
 
-                all_news.append({
-                    "heading": title,
-                    "body": summary,
-                    "link": link
-                })
+    # 🔹 send title + description
+    summary = generate_bangla_summary(title, description)
+
+    save_headline(headline_hash)
+
+    all_news.append({
+        "heading": title,
+        "body": summary,
+        "link": link
+    })
 
     except Exception as e:
         print("❌ FETCH ERROR:", e)
@@ -335,6 +362,7 @@ def fetch_news():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
