@@ -1,19 +1,22 @@
 import os
+import re
 import sqlite3
 import hashlib
 import feedparser
-from flask import Flask, render_template_string, request, redirect
+
+from flask import Flask, request, redirect, render_template_string
+
+# =========================
+# FLASK SETUP
+# =========================
+app = Flask(__name__)
+DB_NAME = "news.db"
+
+# =========================
+# OPENAI SETUP (SAFE)
+# =========================
 from openai import OpenAI
 
-# -----------------------
-# APP CONFIG
-# -----------------------
-app = Flask(__name__)
-DB_NAME = "runner.db"
-
-# -----------------------
-# OPENAI SAFE INIT
-# -----------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = None
@@ -25,72 +28,21 @@ if OPENAI_API_KEY:
         print("❌ OpenAI init failed:", e)
         client = None
 else:
-    print("⚠️ OPENAI_API_KEY missing")
+    print("⚠️ OPENAI_API_KEY missing — using free mode")
 
-# -----------------------
-# FREE FALLBACK SUMMARY
-# -----------------------
-def free_smart_summary(title):
-    if not title:
-        return "সারাংশ তৈরি করা যায়নি।"
-
-    summary = title.strip()
-
-    if len(summary) > 120:
-        summary = summary[:120] + "..."
-
-    return f"সংক্ষিপ্ত সংবাদ: {summary}"
-
-
-# -----------------------
-# AI SUMMARY (SAFE)
-# -----------------------
-def generate_bangla_summary(title, description=""):
-    if not client:
-        return free_smart_summary(title)
-
-    try:
-        content_text = f"শিরোনাম: {title}\nবিস্তারিত: {description}"
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": content_text}],
-            temperature=0.4,
-            max_tokens=500,
-        )
-
-        text = response.choices[0].message.content.strip()
-
-        if not text:
-            return free_smart_summary(title)
-
-        return text
-
-    except Exception as e:
-        print("❌ OPENAI ERROR:", e)
-        return free_smart_summary(title)
-
-
-# -----------------------
-# DATABASE SETUP
-# -----------------------
+# =========================
+# DATABASE
+# =========================
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
 
     c.execute("""
-    CREATE TABLE IF NOT EXISTS sources (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        url TEXT,
-        keywords TEXT
-    )
-    """)
-
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS news_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        headline_hash TEXT UNIQUE
-    )
+        CREATE TABLE IF NOT EXISTS sources (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            url TEXT,
+            keywords TEXT
+        )
     """)
 
     conn.commit()
@@ -98,94 +50,114 @@ def init_db():
 
 init_db()
 
-# -----------------------
-# HTML TEMPLATE
-# -----------------------
-HTML_PAGE = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Runner News Dashboard</title>
-    <style>
-        body { font-family: Arial; padding: 20px; }
-        input { width: 100%; padding: 8px; margin: 5px 0; }
-        button { padding: 10px 15px; margin-top: 10px; }
-        .box { border: 1px solid #ccc; padding: 15px; margin-top: 20px; }
-    </style>
-</head>
-<body>
-
-<h1>🏃 Runner News Dashboard</h1>
-
-<div class="box">
-    <h3>Add RSS Source</h3>
-    <form method="post" action="/add_source">
-        <label>RSS URL:</label>
-        <input name="url" required>
-
-        <label>Keywords (comma separated):</label>
-        <input name="keywords" required>
-
-        <button type="submit">Add Source</button>
-    </form>
-</div>
-
-<div class="box">
-    <h3>Saved Sources</h3>
-    <ul>
-    {% for s in sources %}
-        <li>{{s[1]}} | Keywords: {{s[2]}}</li>
-    {% endfor %}
-    </ul>
-</div>
-
-<div class="box">
-    <h3>Fetch News</h3>
-    <form method="post" action="/fetch">
-        <button type="submit">Fetch News</button>
-    </form>
-</div>
-
-<div class="box">
-    <h3>Generated Bangla News</h3>
-
-    {% if news %}
-        {% for item in news %}
-            <div style="margin-bottom:15px; padding:10px; border:1px solid #ddd;">
-                <p><b>Heading:</b> {{item.heading}}</p>
-                <p>{{item.body}}</p>
-
-                <p style="color: gray; font-size: 12px;">
-                ⚠️ If AI is unavailable, a basic summary is shown.
-                </p>
-
-                <p><a href="{{item.link}}" target="_blank">Open Source</a></p>
-            </div>
-        {% endfor %}
-    {% else %}
-        <p>No news found.</p>
-    {% endif %}
-</div>
-
-</body>
-</html>
-"""
-
-# -----------------------
+# =========================
 # HELPERS
-# -----------------------
+# =========================
 def get_sources():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT * FROM sources")
-    rows = c.fetchall()
+    data = c.fetchall()
     conn.close()
-    return rows
+    return data
 
 
-# -----------------------
+def clean_html(text):
+    if not text:
+        return ""
+    return re.sub("<[^<]+?>", "", text)
+
+
+# =========================
+# FREE SMART SUMMARY (WORKS WITHOUT AI)
+# =========================
+def free_smart_summary(title, description=""):
+    text = description if description else title
+
+    text = clean_html(text).strip()
+
+    if not text:
+        return "সারাংশ তৈরি করা যায়নি।"
+
+    # make short
+    if len(text) > 220:
+        text = text[:220] + "..."
+
+    return f"সংক্ষিপ্ত সংবাদ: {text}"
+
+
+# =========================
+# AI SUMMARY
+# =========================
+def generate_bangla_summary(title, description=""):
+    if not client:
+        return free_smart_summary(title, description)
+
+    try:
+        content_text = f"""
+নিচের সংবাদটি ২-৩ লাইনে সংক্ষিপ্ত বাংলায় লিখো।
+
+শিরোনাম: {title}
+বিস্তারিত: {description}
+"""
+
+        response = client.chat.completions.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": content_text}],
+            temperature=0.4,
+            max_tokens=180,
+        )
+
+        text = response.choices[0].message.content.strip()
+
+        if not text:
+            return free_smart_summary(title, description)
+
+        return text
+
+    except Exception as e:
+        print("❌ OPENAI ERROR:", e)
+        return free_smart_summary(title, description)
+
+
+# =========================
+# HTML
+# =========================
+HTML_PAGE = """
+<h1>Runner News Dashboard</h1>
+
+<h2>Add RSS Source</h2>
+<form method="post" action="/add_source">
+    RSS URL: <input name="url" size="50">
+    Keywords: <input name="keywords" size="50">
+    <button type="submit">Add Source</button>
+</form>
+
+<h2>Saved Sources</h2>
+{% for s in sources %}
+<p>{{s[1]}} | Keywords: {{s[2]}}</p>
+{% endfor %}
+
+<form method="post" action="/fetch">
+    <button type="submit">Fetch News</button>
+</form>
+
+{% if news %}
+<h2>Generated Bangla News</h2>
+{% for n in news %}
+<hr>
+<b>Heading:</b> {{n.heading}}<br><br>
+{{n.body}}<br><br>
+<a href="{{n.link}}" target="_blank">Open Source</a>
+{% endfor %}
+{% endif %}
+
+<p>⚠️ If AI is unavailable, a basic summary is shown.</p>
+"""
+
+# =========================
 # ROUTES
-# -----------------------
+# =========================
 @app.route("/")
 def home():
     sources = get_sources()
@@ -230,6 +202,7 @@ def fetch_news():
                 title = entry.get("title", "")
                 link = entry.get("link", "#")
 
+                # description safe extract
                 description = ""
                 if hasattr(entry, "summary"):
                     description = entry.summary
@@ -257,9 +230,9 @@ def fetch_news():
     )
 
 
-# -----------------------
+# =========================
 # MAIN
-# -----------------------
+# =========================
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
