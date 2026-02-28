@@ -165,7 +165,7 @@ def save_headline(headline_hash):
 # -----------------------
 def generate_bangla_summary(title):
     if not client:
-        return "⚠️ OPENAI_API_KEY not configured."
+        return "OPENAI ERROR: API key not configured"
 
     try:
         prompt = f"""
@@ -187,11 +187,10 @@ def generate_bangla_summary(title):
         return response.choices[0].message.content.strip()
 
     except Exception as e:
-    print("OPENAI ERROR:", str(e))
-    return f"OPENAI ERROR: {str(e)}"
+        error_text = str(e)
+        print("OPENAI ERROR:", error_text)
+        return f"OPENAI ERROR: {error_text}"
 
-# -----------------------
-# ROUTES
 # -----------------------
 @app.route("/")
 def home():
@@ -256,4 +255,5 @@ def fetch_news():
 # -----------------------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
+
 
