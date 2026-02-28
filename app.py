@@ -1,4 +1,35 @@
 import os
+from openai import OpenAI
+
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
+client = None
+if OPENAI_API_KEY:
+    try:
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        print("✅ OpenAI client initialized")
+    except Exception as e:
+        print("❌ OpenAI init failed:", e)
+        client = None
+else:
+    print("⚠️ OPENAI_API_KEY missing")
+# -----------------------
+def free_smart_summary(title):
+    """
+    Simple free summarizer when AI is unavailable
+    """
+    if not title:
+        return "সারাংশ তৈরি করা যায়নি।"
+
+    summary = title.strip()
+
+    # Trim if too long
+    if len(summary) > 120:
+        summary = summary[:120] + "..."
+
+    return f"সংক্ষিপ্ত সংবাদ: {summary}"
+# -----------------------
+import os
 import sqlite3
 import hashlib
 import feedparser
@@ -110,6 +141,10 @@ HTML_PAGE = """
             <div style="margin-bottom:15px; padding:10px; border:1px solid #ddd;">
                 <p><b>Heading:</b> {{item.heading}}</p>
                 <p>{{item.body}}</p>
+
+<p style="color: gray; font-size: 12px;">
+⚠️ If AI is unavailable, a basic summary is shown.
+</p>
                 <p><a href="{{item.link}}" target="_blank">Open Source</a></p>
             </div>
         {% endfor %}
@@ -172,32 +207,42 @@ def save_headline(headline_hash):
 # AI SUMMARY (VERY SAFE)
 # -----------------------
 def generate_bangla_summary(title):
+    """
+    Try AI first → if fails → auto fallback to free summary
+    """
+
+    # If client missing → use free mode
     if not client:
-        return "OPENAI ERROR: API key missing on server"
+        print("⚠️ Using FREE summary (no client)")
+        return free_smart_summary(title)
 
     try:
         prompt = f"""
 সংবাদ শিরোনাম: {title}
 
-নির্দেশনা:
-- সহজ বাংলায় ২-৩ লাইনের সংবাদ সারাংশ লিখুন
-- নিরপেক্ষ ভাষা ব্যবহার করুন
+৬৫০–৯০০ অক্ষরের একটি সংক্ষিপ্ত বাংলা সংবাদ সারাংশ লিখুন।
+নিরপেক্ষ ও পেশাদার ভাষা ব্যবহার করুন।
 """
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.4,
-            max_tokens=200,
+            max_tokens=500,
         )
 
-        return response.choices[0].message.content.strip()
+        text = response.choices[0].message.content.strip()
+
+        if not text:
+            print("⚠️ Empty AI response → fallback")
+            return free_smart_summary(title)
+
+        return text
 
     except Exception as e:
-        error_text = str(e)
-        print("OPENAI ERROR:", error_text)
-        return f"OPENAI ERROR: {error_text}"
-
+        print("❌ OPENAI ERROR:", e)
+        print("⚠️ Falling back to FREE summary")
+        return free_smart_summary(title)
 # -----------------------
 # ROUTES
 # -----------------------
@@ -282,5 +327,6 @@ def fetch_news():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
