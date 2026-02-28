@@ -288,9 +288,17 @@ def fetch_news():
                 continue
 
             for entry in feed.entries[:10]:
-                title = entry.get("title", "")
-                link = entry.get("link", "#")
+    title = entry.get("title", "")
+    link = entry.get("link", "#")
 
+    # ✅ NEW — get full news text from RSS
+    description = ""
+
+    if hasattr(entry, "summary"):
+        description = entry.summary
+    elif hasattr(entry, "description"):
+        description = entry.description
+        
                 if not title:
                     continue
 
@@ -302,7 +310,7 @@ def fetch_news():
                 if is_duplicate(headline_hash):
                     continue
 
-                summary = generate_bangla_summary(title)
+                summary = generate_bangla_summary(title + " " + description)
                 save_headline(headline_hash)
 
                 all_news.append({
@@ -327,6 +335,7 @@ def fetch_news():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
