@@ -1,6 +1,19 @@
 import os
+import sqlite3
+import hashlib
+import feedparser
+from flask import Flask, render_template_string, request, redirect
 from openai import OpenAI
 
+# -----------------------
+# APP CONFIG
+# -----------------------
+app = Flask(__name__)
+DB_NAME = "runner.db"
+
+# -----------------------
+# OPENAI SAFE INIT
+# -----------------------
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = None
@@ -13,21 +26,25 @@ if OPENAI_API_KEY:
         client = None
 else:
     print("⚠️ OPENAI_API_KEY missing")
+
+# -----------------------
+# FREE FALLBACK SUMMARY
 # -----------------------
 def free_smart_summary(title):
-    """
-    Simple free summarizer when AI is unavailable
-    """
     if not title:
         return "সারাংশ তৈরি করা যায়নি।"
 
     summary = title.strip()
 
-    # Trim if too long
     if len(summary) > 120:
         summary = summary[:120] + "..."
 
     return f"সংক্ষিপ্ত সংবাদ: {summary}"
+
+
+# -----------------------
+# AI SUMMARY (SAFE)
+# -----------------------
 def generate_bangla_summary(title, description=""):
     if not client:
         return free_smart_summary(title)
@@ -53,36 +70,6 @@ def generate_bangla_summary(title, description=""):
         print("❌ OPENAI ERROR:", e)
         return free_smart_summary(title)
 
-
-# -----------------------
-import os
-import sqlite3
-import hashlib
-import feedparser
-
-from flask import Flask, render_template_string, request, redirect
-from openai import OpenAI
-
-# -----------------------
-# APP CONFIG
-# -----------------------
-app = Flask(__name__)
-DB_NAME = "runner.db"
-
-# -----------------------
-# OPENAI SAFE INIT
-# -----------------------
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-client = None
-if OPENAI_API_KEY:
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        print("✅ OpenAI client initialized")
-    except Exception as e:
-        print("❌ OpenAI init failed:", e)
-else:
-    print("⚠️ OPENAI_API_KEY not found")
 
 # -----------------------
 # DATABASE SETUP
@@ -168,9 +155,10 @@ HTML_PAGE = """
                 <p><b>Heading:</b> {{item.heading}}</p>
                 <p>{{item.body}}</p>
 
-<p style="color: gray; font-size: 12px;">
-⚠️ If AI is unavailable, a basic summary is shown.
-</p>
+                <p style="color: gray; font-size: 12px;">
+                ⚠️ If AI is unavailable, a basic summary is shown.
+                </p>
+
                 <p><a href="{{item.link}}" target="_blank">Open Source</a></p>
             </div>
         {% endfor %}
@@ -195,80 +183,6 @@ def get_sources():
     return rows
 
 
-def keyword_match(title, keywords):
-    title_lower = title.lower()
-    for kw in keywords.split(","):
-        if kw.strip().lower() in title_lower:
-            return True
-    return False
-
-
-def is_duplicate(headline_hash):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(
-        "SELECT 1 FROM news_history WHERE headline_hash=?",
-        (headline_hash,)
-    )
-    exists = c.fetchone()
-    conn.close()
-    return exists is not None
-
-
-def save_headline(headline_hash):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    try:
-        c.execute(
-            "INSERT INTO news_history (headline_hash) VALUES (?)",
-            (headline_hash,)
-        )
-        conn.commit()
-    except Exception as e:
-        print("DB save error:", e)
-    conn.close()
-
-
-# -----------------------
-# AI SUMMARY (VERY SAFE)
-# -----------------------
-def generate_bangla_summary(title):
-    """
-    Try AI first → if fails → auto fallback to free summary
-    """
-
-    # If client missing → use free mode
-    if not client:
-        print("⚠️ Using FREE summary (no client)")
-        return free_smart_summary(title)
-
-    try:
-        prompt = f"""
-সংবাদ শিরোনাম: {title}
-
-৬৫০–৯০০ অক্ষরের একটি সংক্ষিপ্ত বাংলা সংবাদ সারাংশ লিখুন।
-নিরপেক্ষ ও পেশাদার ভাষা ব্যবহার করুন।
-"""
-
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.4,
-            max_tokens=500,
-        )
-
-        text = response.choices[0].message.content.strip()
-
-        if not text:
-            print("⚠️ Empty AI response → fallback")
-            return free_smart_summary(title)
-
-        return text
-
-    except Exception as e:
-        print("❌ OPENAI ERROR:", e)
-        print("⚠️ Falling back to FREE summary")
-        return free_smart_summary(title)
 # -----------------------
 # ROUTES
 # -----------------------
@@ -297,7 +211,7 @@ def add_source():
 
     return redirect("/")
 
-# -----------------------
+
 @app.route("/fetch", methods=["POST"])
 def fetch_news():
     sources = get_sources()
@@ -306,7 +220,6 @@ def fetch_news():
     try:
         for src in sources:
             rss_url = src[1]
-            keywords = src[2]
 
             feed = feedparser.parse(rss_url)
 
@@ -317,7 +230,6 @@ def fetch_news():
                 title = entry.get("title", "")
                 link = entry.get("link", "#")
 
-                # 🔹 get description safely
                 description = ""
                 if hasattr(entry, "summary"):
                     description = entry.summary
@@ -327,21 +239,7 @@ def fetch_news():
                 if not title:
                     continue
 
-                # 🔹 TEMP: keyword filter disabled
-                # if not keyword_match(title, keywords):
-                #     continue
-
-                headline_hash = hashlib.md5(title.encode()).hexdigest()
-
-                # 🔹 TEMP: duplicate check disabled
-                # if is_duplicate(headline_hash):
-                #     continue
-
-                # 🔹 generate summary
                 summary = generate_bangla_summary(title, description)
-
-                # 🔹 TEMP: history save disabled
-                # save_headline(headline_hash)
 
                 all_news.append({
                     "heading": title,
@@ -365,7 +263,3 @@ def fetch_news():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
-
-
-
