@@ -327,8 +327,8 @@ def fetch_news():
                 if not title:
                     continue
 
-                if not keyword_match(title, keywords):
-                    continue
+              #  if not keyword_match(title, keywords):
+              #      continue
 
                 headline_hash = hashlib.md5(title.encode()).hexdigest()
 
@@ -361,6 +361,7 @@ def fetch_news():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
 
 
 
