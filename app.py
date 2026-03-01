@@ -19,7 +19,8 @@ def clean_text(text):
     text = html.unescape(text)
     text = re.sub(r"<.*?>", "", text)
     text = re.sub(r"আরও পড়ুন[:：]?.*", "", text)
-    text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
+    text = re.sub(r"বিস্তারিত.*", "", text)
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff&nbsp;]", " ", text)
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
@@ -57,50 +58,52 @@ def get_priority(text):
 
 
 # ===============================
-# SMART BANGLA SUMMARY
+# 🔥 IMPROVED SMART SUMMARY (FREE BEST)
 # ===============================
 def smart_summary(text):
     TARGET_MIN = 650
     TARGET_MAX = 900
 
     sentences = re.split(r"[।!?]", text)
-    sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
+    sentences = [clean_text(s) for s in sentences if len(s.strip()) > 25]
+
+    if not sentences:
+        return text[:TARGET_MAX]
 
     priority_words = [
         "নিহত","হামলা","বিস্ফোরণ","সংঘর্ষ",
-        "গ্রেফতার","ক্ষেপণাস্ত্র","যুদ্ধ"
+        "ক্ষেপণাস্ত্র","যুদ্ধ","গ্রেফতার"
     ]
 
     scored = []
 
     for s in sentences:
-        score = sum(1 for w in priority_words if w in s)
+        score = sum(2 for w in priority_words if w in s)
+        score += len(s) / 100
         scored.append((score, s))
 
-    scored.sort(reverse=True, key=lambda x: (x[0], len(x[1])))
+    scored.sort(reverse=True, key=lambda x: x[0])
 
-    selected = []
+    summary_parts = []
+    used = set()
     total_len = 0
 
     for score, sent in scored:
-        if total_len < TARGET_MAX:
-            selected.append(sent)
-            total_len += len(sent)
-        else:
+        if sent in used:
+            continue
+
+        if total_len + len(sent) > TARGET_MAX:
+            continue
+
+        summary_parts.append(sent)
+        used.add(sent)
+        total_len += len(sent)
+
+        if total_len >= TARGET_MIN:
             break
 
-    if not selected:
-        selected = sentences[:5]
-
-    summary = "। ".join(selected).strip()
-
-    if len(summary) < TARGET_MIN:
-        for s in sentences:
-            if s not in selected:
-                summary += "। " + s
-                if len(summary) >= TARGET_MIN:
-                    break
-
+    summary = "। ".join(summary_parts).strip()
+    summary = re.sub(r"\s+", " ", summary)
     summary = summary[:TARGET_MAX]
 
     return summary
@@ -141,7 +144,7 @@ def delete_source(index):
 
 
 # ===============================
-# FETCH NEWS (PRO LEVEL)
+# 🚀 FETCH NEWS — FIXED MULTI-SOURCE
 # ===============================
 @app.route("/fetch_news")
 def fetch_news():
@@ -151,27 +154,36 @@ def fetch_news():
     try:
         for src in SAVED_SOURCES:
             feed = feedparser.parse(src["url"])
-            keywords = [k.strip() for k in src["keywords"].split(",") if k.strip()]
+            keywords = [k.strip().lower() for k in src["keywords"].split(",") if k.strip()]
 
-            for entry in feed.entries[:25]:
+            for entry in feed.entries[:30]:
                 title = clean_text(entry.get("title", ""))
                 summary = clean_text(entry.get("summary", ""))
 
+                if not title:
+                    continue
+
                 full_text = (title + " " + summary).lower()
 
-                # keyword filter
+                # 🔥 SMART KEYWORD FILTER (IMPORTANT FIX)
                 if keywords:
-                    if not any(k.lower() in full_text for k in keywords):
-                        continue
+                    match_found = any(k in full_text for k in keywords)
+
+                    if not match_found:
+                        temp_priority, _ = get_priority(full_text)
+                        if temp_priority != "HIGH":
+                            continue
 
                 # priority
                 priority, score = get_priority(full_text)
 
-                # date
+                # safe date parsing
                 try:
-                    published = entry.get("published", "")
-                    date_obj = datetime(*entry.published_parsed[:6])
-                    nice_date = date_obj.strftime("%d %b %Y %I:%M %p")
+                    if hasattr(entry, "published_parsed") and entry.published_parsed:
+                        date_obj = datetime(*entry.published_parsed[:6])
+                        nice_date = date_obj.strftime("%d %b %Y %I:%M %p")
+                    else:
+                        nice_date = "Unknown"
                 except:
                     nice_date = "Unknown"
 
@@ -184,9 +196,11 @@ def fetch_news():
                     "date": nice_date
                 })
 
-        # 🔥 SORT BY PRIORITY + SCORE
+        # 🔥 PRO SORTING (priority + score)
+        priority_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+
         LAST_FETCHED_NEWS.sort(
-            key=lambda x: (x["score"]),
+            key=lambda x: (priority_order.get(x["priority"], 0), x["score"]),
             reverse=True
         )
 
