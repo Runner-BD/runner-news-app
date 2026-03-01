@@ -3,6 +3,7 @@ import re
 import sqlite3
 import hashlib
 import feedparser
+import html
 
 from flask import Flask, request, redirect, render_template_string
 from openai import OpenAI
@@ -62,70 +63,54 @@ def get_sources():
 
 
 def clean_html(text):
+    """Remove HTML tags and decode entities"""
     if not text:
         return ""
-    return re.sub("<[^<]+?>", "", text)
 
+    text = re.sub("<[^<]+?>", "", text)
+    text = html.unescape(text)
+    return text.strip()
 
 # =========================
-# FREE SMART SUMMARY (IMPROVED)
+# FREE SMART SUMMARY
 # =========================
 def free_smart_summary(title, description=""):
     text = description if description else title
-    text = clean_html(text).strip()
+    text = clean_html(text)
 
     if not text:
         return "সারাংশ তৈরি করা যায়নি।"
 
-    # better length
-    if len(text) > 350:
-        text = text[:350] + "..."
+    if len(text) > 260:
+        text = text[:260] + "..."
 
     return f"সংক্ষিপ্ত সংবাদ: {text}"
 
-
 # =========================
-# AI SUMMARY (STRONG PROMPT)
+# AI SUMMARY
 # =========================
 def generate_bangla_summary(title, description=""):
-    # fallback if no AI
     if not client:
-        print("⚠️ Using FREE summary")
         return free_smart_summary(title, description)
 
     try:
-        description_clean = clean_html(description)
-
-        prompt = f"""
-তুমি একজন পেশাদার বাংলা সংবাদ সম্পাদক।
-
-নিচের তথ্য থেকে ৬৫০–৯০০ অক্ষরের একটি সংক্ষিপ্ত,
-পরিষ্কার ও নিরপেক্ষ বাংলা সংবাদ সারাংশ লেখো।
-
-❗ নিয়ম:
-- শুধু বাংলা ভাষা
-- কোনো মতামত না
-- পেশাদার টোন
-- তথ্যভিত্তিক
-- ১ অনুচ্ছেদ
+        content_text = f"""
+নিচের সংবাদটি সংক্ষিপ্ত, পরিষ্কার ও পেশাদার বাংলায় লিখো (৬৫০–৯০০ অক্ষরের মধ্যে)।
 
 শিরোনাম: {title}
-
-বিস্তারিত:
-{description_clean}
+বিস্তারিত: {clean_html(description)}
 """
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-            max_tokens=500,
+            messages=[{"role": "user", "content": content_text}],
+            temperature=0.4,
+            max_tokens=400,
         )
 
         text = response.choices[0].message.content.strip()
 
-        if not text or len(text) < 40:
-            print("⚠️ Weak AI response → fallback")
+        if not text:
             return free_smart_summary(title, description)
 
         return text
@@ -133,7 +118,6 @@ def generate_bangla_summary(title, description=""):
     except Exception as e:
         print("❌ OPENAI ERROR:", e)
         return free_smart_summary(title, description)
-
 
 # =========================
 # HTML
@@ -162,7 +146,12 @@ HTML_PAGE = """
 {% for n in news %}
 <hr>
 <b>Heading:</b> {{n.heading}}<br><br>
+
 {{n.body}}<br><br>
+
+<b>Source:</b> {{n.source}}<br>
+<b>Published:</b> {{n.published}}<br><br>
+
 <a href="{{n.link}}" target="_blank">Open Source</a>
 {% endfor %}
 {% endif %}
@@ -213,16 +202,22 @@ def fetch_news():
             if not feed.entries:
                 continue
 
+            # extract domain once
+            source_name = rss_url.replace("https://", "").replace("http://", "").split("/")[0]
+
             for entry in feed.entries[:10]:
                 title = entry.get("title", "")
                 link = entry.get("link", "#")
 
-                # safe description
+                # description safe extract
                 description = ""
                 if hasattr(entry, "summary"):
                     description = entry.summary
                 elif hasattr(entry, "description"):
                     description = entry.description
+
+                # published date
+                published = entry.get("published", "") or entry.get("pubDate", "")
 
                 if not title:
                     continue
@@ -232,7 +227,9 @@ def fetch_news():
                 all_news.append({
                     "heading": title,
                     "body": summary,
-                    "link": link
+                    "link": link,
+                    "source": source_name,
+                    "published": published
                 })
 
     except Exception as e:
@@ -243,7 +240,6 @@ def fetch_news():
         sources=sources,
         news=all_news
     )
-
 
 # =========================
 # MAIN
