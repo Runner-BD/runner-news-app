@@ -5,6 +5,7 @@ import hashlib
 import feedparser
 
 from flask import Flask, request, redirect, render_template_string
+from openai import OpenAI
 
 # =========================
 # FLASK SETUP
@@ -15,8 +16,6 @@ DB_NAME = "news.db"
 # =========================
 # OPENAI SETUP (SAFE)
 # =========================
-from openai import OpenAI
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 client = None
@@ -69,48 +68,64 @@ def clean_html(text):
 
 
 # =========================
-# FREE SMART SUMMARY (WORKS WITHOUT AI)
+# FREE SMART SUMMARY (IMPROVED)
 # =========================
 def free_smart_summary(title, description=""):
     text = description if description else title
-
     text = clean_html(text).strip()
 
     if not text:
         return "সারাংশ তৈরি করা যায়নি।"
 
-    # make short
-    if len(text) > 220:
-        text = text[:220] + "..."
+    # better length
+    if len(text) > 350:
+        text = text[:350] + "..."
 
     return f"সংক্ষিপ্ত সংবাদ: {text}"
 
 
 # =========================
-# AI SUMMARY
+# AI SUMMARY (STRONG PROMPT)
 # =========================
 def generate_bangla_summary(title, description=""):
+    # fallback if no AI
     if not client:
+        print("⚠️ Using FREE summary")
         return free_smart_summary(title, description)
 
     try:
-        content_text = f"""
-নিচের সংবাদটি ২-৩ লাইনে সংক্ষিপ্ত বাংলায় লিখো।
+        description_clean = clean_html(description)
+
+        prompt = f"""
+তুমি একজন পেশাদার বাংলা সংবাদ সম্পাদক।
+
+নিচের তথ্য থেকে ৬৫০–৯০০ অক্ষরের একটি সংক্ষিপ্ত,
+পরিষ্কার ও নিরপেক্ষ বাংলা সংবাদ সারাংশ লেখো।
+
+❗ নিয়ম:
+- শুধু বাংলা ভাষা
+- কোনো মতামত না
+- পেশাদার টোন
+- তথ্যভিত্তিক
+- ১ অনুচ্ছেদ
 
 শিরোনাম: {title}
-বিস্তারিত: {description}
+
+বিস্তারিত:
+{description_clean}
 """
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": content_text}],
-            temperature=0.4,
-            max_tokens=180,
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=500,
         )
 
         text = response.choices[0].message.content.strip()
 
-        if not text:
+        if not text or len(text) < 40:
+            print("⚠️ Weak AI response → fallback")
             return free_smart_summary(title, description)
 
         return text
@@ -202,7 +217,7 @@ def fetch_news():
                 title = entry.get("title", "")
                 link = entry.get("link", "#")
 
-                # description safe extract
+                # safe description
                 description = ""
                 if hasattr(entry, "summary"):
                     description = entry.summary
