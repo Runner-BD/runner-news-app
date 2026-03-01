@@ -1,7 +1,6 @@
 import os
 import re
 import sqlite3
-import hashlib
 import feedparser
 import html
 
@@ -40,7 +39,7 @@ def init_db():
     c.execute("""
         CREATE TABLE IF NOT EXISTS sources (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT,
+            url TEXT UNIQUE,
             keywords TEXT
         )
     """)
@@ -56,20 +55,37 @@ init_db()
 def get_sources():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    c.execute("SELECT * FROM sources")
+    c.execute("SELECT * FROM sources ORDER BY id DESC")
     data = c.fetchall()
     conn.close()
     return data
 
 
+def delete_source_db(source_id):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("DELETE FROM sources WHERE id=?", (source_id,))
+    conn.commit()
+    conn.close()
+
+
 def clean_html(text):
-    """Remove HTML tags and decode entities"""
     if not text:
         return ""
-
     text = re.sub("<[^<]+?>", "", text)
     text = html.unescape(text)
     return text.strip()
+
+
+def keyword_match(title, description, keyword_string):
+    """Check if any keyword exists in title or description"""
+    if not keyword_string:
+        return True
+
+    text = f"{title} {description}".lower()
+    keywords = [k.strip().lower() for k in keyword_string.split(",") if k.strip()]
+
+    return any(k in text for k in keywords)
 
 # =========================
 # FREE SMART SUMMARY
@@ -134,11 +150,17 @@ HTML_PAGE = """
 
 <h2>Saved Sources</h2>
 {% for s in sources %}
-<p>{{s[1]}} | Keywords: {{s[2]}}</p>
+<p>
+{{s[1]}} | Keywords: {{s[2]}}
+<form method="post" action="/delete_source" style="display:inline;">
+    <input type="hidden" name="id" value="{{s[0]}}">
+    <button type="submit">❌ Delete</button>
+</form>
+</p>
 {% endfor %}
 
 <form method="post" action="/fetch">
-    <button type="submit">Fetch News</button>
+    <button type="submit">🚀 Fetch News</button>
 </form>
 
 {% if news %}
@@ -170,21 +192,32 @@ def home():
 
 @app.route("/add_source", methods=["POST"])
 def add_source():
-    url = request.form.get("url")
-    keywords = request.form.get("keywords")
+    url = request.form.get("url", "").strip()
+    keywords = request.form.get("keywords", "").strip()
 
-    if not url or not keywords:
+    if not url:
         return redirect("/")
 
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(
-        "INSERT INTO sources (url, keywords) VALUES (?, ?)",
-        (url, keywords)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute(
+            "INSERT OR IGNORE INTO sources (url, keywords) VALUES (?, ?)",
+            (url, keywords)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("❌ INSERT ERROR:", e)
 
+    return redirect("/")
+
+
+@app.route("/delete_source", methods=["POST"])
+def delete_source():
+    source_id = request.form.get("id")
+    if source_id:
+        delete_source_db(source_id)
     return redirect("/")
 
 
@@ -196,30 +229,32 @@ def fetch_news():
     try:
         for src in sources:
             rss_url = src[1]
+            keyword_string = src[2] or ""
 
             feed = feedparser.parse(rss_url)
 
             if not feed.entries:
                 continue
 
-            # extract domain once
             source_name = rss_url.replace("https://", "").replace("http://", "").split("/")[0]
 
-            for entry in feed.entries[:10]:
+            for entry in feed.entries[:15]:
                 title = entry.get("title", "")
                 link = entry.get("link", "#")
 
-                # description safe extract
                 description = ""
                 if hasattr(entry, "summary"):
                     description = entry.summary
                 elif hasattr(entry, "description"):
                     description = entry.description
 
-                # published date
                 published = entry.get("published", "") or entry.get("pubDate", "")
 
                 if not title:
+                    continue
+
+                # ✅ KEYWORD FILTER (FIXED)
+                if not keyword_match(title, description, keyword_string):
                     continue
 
                 summary = generate_bangla_summary(title, description)
