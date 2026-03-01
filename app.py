@@ -60,6 +60,7 @@ def get_priority(text):
 # ===============================
 # 🔥 IMPROVED SMART SUMMARY (FREE BEST)
 # ===============================
+
 def smart_summary(text):
     TARGET_MIN = 650
     TARGET_MAX = 900
@@ -79,35 +80,39 @@ def smart_summary(text):
 
     for s in sentences:
         score = sum(2 for w in priority_words if w in s)
-        score += len(s) / 100
+        score += len(s) / 120
         scored.append((score, s))
 
     scored.sort(reverse=True, key=lambda x: x[0])
 
+    # 🔥 build segment-style summary
     summary_parts = []
-    used = set()
     total_len = 0
+    used = set()
 
     for score, sent in scored:
         if sent in used:
             continue
 
-        if total_len + len(sent) > TARGET_MAX:
+        # short headline from sentence
+        short_title = sent[:70].strip()
+
+        block = f"\n\n🔹 {short_title}\n{sent}"
+
+        if total_len + len(block) > TARGET_MAX:
             continue
 
-        summary_parts.append(sent)
+        summary_parts.append(block)
         used.add(sent)
-        total_len += len(sent)
+        total_len += len(block)
 
         if total_len >= TARGET_MIN:
             break
 
-    summary = "। ".join(summary_parts).strip()
-    summary = re.sub(r"\s+", " ", summary)
-    summary = summary[:TARGET_MAX]
+    final_summary = "".join(summary_parts).strip()
+    final_summary = final_summary[:TARGET_MAX]
 
-    return summary
-
+    return final_summary
 
 # ===============================
 # ROUTES
@@ -156,7 +161,7 @@ def fetch_news():
             feed = feedparser.parse(src["url"])
             keywords = [k.strip().lower() for k in src["keywords"].split(",") if k.strip()]
 
-            for entry in feed.entries[:30]:
+            for entry in feed.entries[:35]:
                 title = clean_text(entry.get("title", ""))
                 summary = clean_text(entry.get("summary", ""))
 
@@ -165,19 +170,16 @@ def fetch_news():
 
                 full_text = (title + " " + summary).lower()
 
-                # 🔥 SMART KEYWORD FILTER (IMPORTANT FIX)
-                if keywords:
-                    match_found = any(k in full_text for k in keywords)
+                # ✅ smarter keyword logic
+                keyword_match = any(k in full_text for k in keywords) if keywords else True
 
-                    if not match_found:
-                        temp_priority, _ = get_priority(full_text)
-                        if temp_priority != "HIGH":
-                            continue
-
-                # priority
                 priority, score = get_priority(full_text)
 
-                # safe date parsing
+                # allow more diversity
+                if keywords and not keyword_match and priority != "HIGH":
+                    continue
+
+                # safe date
                 try:
                     if hasattr(entry, "published_parsed") and entry.published_parsed:
                         date_obj = datetime(*entry.published_parsed[:6])
@@ -196,7 +198,7 @@ def fetch_news():
                     "date": nice_date
                 })
 
-        # 🔥 PRO SORTING (priority + score)
+        # ✅ strong professional sorting
         priority_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
         LAST_FETCHED_NEWS.sort(
@@ -209,6 +211,7 @@ def fetch_news():
 
     return home()
 
+# ===============================
 
 @app.route("/generate_selected", methods=["POST"])
 def generate_selected():
@@ -292,3 +295,4 @@ TEMPLATE = """
 
 if __name__ == "__main__":
     app.run(debug=True)
+
