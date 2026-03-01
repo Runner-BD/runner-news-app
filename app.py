@@ -3,7 +3,6 @@ import re
 import sqlite3
 import feedparser
 import html
-import math
 
 from flask import Flask, request, redirect, render_template_string
 from openai import OpenAI
@@ -15,7 +14,7 @@ app = Flask(__name__)
 DB_NAME = "news.db"
 
 # =========================
-# OPENAI SETUP
+# OPENAI SETUP (SAFE)
 # =========================
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
@@ -51,28 +50,6 @@ def init_db():
 init_db()
 
 # =========================
-# CATEGORY DETECTOR (Option C)
-# =========================
-def detect_category(text):
-    text = text.lower()
-
-    if any(k in text for k in ["রাজনীতি", "নির্বাচন", "সরকার", "মন্ত্রী"]):
-        return "Politics"
-    if any(k in text for k in ["অর্থনীতি", "ব্যাংক", "টাকা", "বাজার"]):
-        return "Business & Finance"
-    if any(k in text for k in ["প্রযুক্তি", "টেক", "মোবাইল", "এআই"]):
-        return "Science & Technology"
-    if any(k in text for k in ["স্বাস্থ্য", "হাসপাতাল", "রোগ", "চিকিৎসা"]):
-        return "Health"
-
-    return "Others"
-
-def assign_priority(category):
-    if category in ["Politics", "Business & Finance"]:
-        return "HIGH"
-    return "MEDIUM"
-
-# =========================
 # HELPERS
 # =========================
 def get_sources():
@@ -83,12 +60,14 @@ def get_sources():
     conn.close()
     return data
 
+
 def delete_source_db(source_id):
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("DELETE FROM sources WHERE id=?", (source_id,))
     conn.commit()
     conn.close()
+
 
 def clean_html(text):
     if not text:
@@ -97,48 +76,95 @@ def clean_html(text):
     text = html.unescape(text)
     return text.strip()
 
+
+# ✅ NEW — REMOVE NEWS JUNK
+def remove_news_junk(text):
+    """Remove common Bangla news junk phrases"""
+    if not text:
+        return ""
+
+    junk_patterns = [
+        r"আরও পড়ুন[:：].*",
+        r"বিস্তারিত পড়ুন[:：].*",
+        r"Read more[:：].*",
+        r"Advertisement.*",
+        r"এ সম্পর্কিত.*",
+    ]
+
+    for pattern in junk_patterns:
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+
+    return text.strip()
+
+
 def keyword_match(title, description, keyword_string):
+    """Check if any keyword exists in title or description"""
     if not keyword_string:
         return True
 
     text = f"{title} {description}".lower()
     keywords = [k.strip().lower() for k in keyword_string.split(",") if k.strip()]
+
     return any(k in text for k in keywords)
 
 # =========================
-# SUMMARY ENGINE
+# FREE SMART SUMMARY
 # =========================
-def free_combined_summary(text):
-    text = clean_html(text)
-    if len(text) > 900:
-        text = text[:900]
-    return text
+def free_smart_summary(title, description=""):
+    text = description if description else title
+    text = remove_news_junk(clean_html(text))
 
-def generate_combined_summary(text):
+    if not text:
+        return "সারাংশ তৈরি করা যায়নি।"
+
+    if len(text) > 260:
+        text = text[:260] + "..."
+
+    return f"সংক্ষিপ্ত সংবাদ: {text}"
+
+# =========================
+# AI SUMMARY (LEVEL-1 IMPROVED)
+# =========================
+def generate_bangla_summary(title, description=""):
+    cleaned_description = remove_news_junk(clean_html(description))
+
     if not client:
-        return free_combined_summary(text)
+        return free_smart_summary(title, cleaned_description)
 
     try:
-        prompt = f"""
-নিচের সব খবর মিলিয়ে ৬৫০–৯০০ অক্ষরের মধ্যে একটি সংক্ষিপ্ত,
-পেশাদার বাংলা নিউজ সারাংশ লিখো।
+        content_text = f"""
+তুমি একজন পেশাদার বাংলা নিউজ সম্পাদক।
 
-{text}
+নিচের সংবাদটি ৬৫০-৯০০ অক্ষরের মধ্যে সংক্ষিপ্ত, তথ্যভিত্তিক এবং পরিষ্কার বাংলায় লিখো।
+
+নিয়ম:
+- অপ্রয়োজনীয় কথা নয়
+- কোনো বিজ্ঞাপন নয়
+- 'আরও পড়ুন' টাইপ লেখা বাদ দাও
+- নিউজ স্টাইল বজায় রাখো
+- একই তথ্য পুনরাবৃত্তি করো না
+
+শিরোনাম: {title}
+বিস্তারিত: {cleaned_description}
 """
 
         response = client.chat.completions.create(
             model="gpt-4o-mini",
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": content_text}],
             temperature=0.4,
-            max_tokens=500,
+            max_tokens=400,
         )
 
-        result = response.choices[0].message.content.strip()
-        return result if result else free_combined_summary(text)
+        text = response.choices[0].message.content.strip()
+
+        if not text:
+            return free_smart_summary(title, cleaned_description)
+
+        return text
 
     except Exception as e:
-        print("❌ AI SUMMARY ERROR:", e)
-        return free_combined_summary(text)
+        print("❌ OPENAI ERROR:", e)
+        return free_smart_summary(title, cleaned_description)
 
 # =========================
 # HTML
@@ -169,28 +195,21 @@ HTML_PAGE = """
 </form>
 
 {% if news %}
-<h2>Select News</h2>
-<form method="post" action="/generate">
+<h2>Generated Bangla News</h2>
 {% for n in news %}
 <hr>
-<input type="checkbox" name="selected" value="{{loop.index0}}">
-<b>{{n.heading}}</b><br>
-Category: {{n.category}} | Priority: {{n.priority}}<br>
+<b>Heading:</b> {{n.heading}}<br><br>
+
+{{n.body}}<br><br>
+
+<b>Source:</b> {{n.source}}<br>
+<b>Published:</b> {{n.published}}<br><br>
+
+<a href="{{n.link}}" target="_blank">Open Source</a>
 {% endfor %}
-<br>
-<button type="submit">🧠 Generate Final Summary</button>
-</form>
 {% endif %}
 
-{% if final_summary %}
-<hr>
-<h2>📊 Final News Summary</h2>
-<p>{{final_summary}}</p>
-
-<b>Total Characters:</b> {{char_count}}<br>
-<b>Slides Needed:</b> {{slides}}<br>
-<b>Seconds per Slide:</b> {{seconds}}<br>
-{% endif %}
+<p>⚠️ If AI is unavailable, a basic summary is shown.</p>
 """
 
 # =========================
@@ -198,7 +217,9 @@ Category: {{n.category}} | Priority: {{n.priority}}<br>
 # =========================
 @app.route("/")
 def home():
-    return render_template_string(HTML_PAGE, sources=get_sources(), news=None)
+    sources = get_sources()
+    return render_template_string(HTML_PAGE, sources=sources, news=None)
+
 
 @app.route("/add_source", methods=["POST"])
 def add_source():
@@ -208,16 +229,20 @@ def add_source():
     if not url:
         return redirect("/")
 
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute(
-        "INSERT OR IGNORE INTO sources (url, keywords) VALUES (?, ?)",
-        (url, keywords)
-    )
-    conn.commit()
-    conn.close()
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        c = conn.cursor()
+        c.execute(
+            "INSERT OR IGNORE INTO sources (url, keywords) VALUES (?, ?)",
+            (url, keywords)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print("❌ INSERT ERROR:", e)
 
     return redirect("/")
+
 
 @app.route("/delete_source", methods=["POST"])
 def delete_source():
@@ -226,74 +251,59 @@ def delete_source():
         delete_source_db(source_id)
     return redirect("/")
 
+
 @app.route("/fetch", methods=["POST"])
 def fetch_news():
     sources = get_sources()
     all_news = []
 
-    for src in sources:
-        rss_url = src[1]
-        keyword_string = src[2] or ""
+    try:
+        for src in sources:
+            rss_url = src[1]
+            keyword_string = src[2] or ""
 
-        feed = feedparser.parse(rss_url)
-        source_name = rss_url.replace("https://", "").replace("http://", "").split("/")[0]
+            feed = feedparser.parse(rss_url)
 
-        for entry in feed.entries[:15]:
-            title = entry.get("title", "")
-            link = entry.get("link", "#")
-            description = entry.get("summary", "")
-
-            if not title:
+            if not feed.entries:
                 continue
 
-            if not keyword_match(title, description, keyword_string):
-                continue
+            source_name = rss_url.replace("https://", "").replace("http://", "").split("/")[0]
 
-            category = detect_category(title + " " + description)
-            priority = assign_priority(category)
+            for entry in feed.entries[:15]:
+                title = entry.get("title", "")
+                link = entry.get("link", "#")
 
-            all_news.append({
-                "heading": title,
-                "link": link,
-                "category": category,
-                "priority": priority,
-                "text": clean_html(description)
-            })
+                description = ""
+                if hasattr(entry, "summary"):
+                    description = entry.summary
+                elif hasattr(entry, "description"):
+                    description = entry.description
 
-    app.config["LAST_NEWS"] = all_news
+                published = entry.get("published", "") or entry.get("pubDate", "")
+
+                if not title:
+                    continue
+
+                if not keyword_match(title, description, keyword_string):
+                    continue
+
+                summary = generate_bangla_summary(title, description)
+
+                all_news.append({
+                    "heading": title,
+                    "body": summary,
+                    "link": link,
+                    "source": source_name,
+                    "published": published
+                })
+
+    except Exception as e:
+        print("❌ FETCH ERROR:", e)
 
     return render_template_string(
         HTML_PAGE,
         sources=sources,
         news=all_news
-    )
-
-@app.route("/generate", methods=["POST"])
-def generate():
-    selected_ids = request.form.getlist("selected")
-    news_list = app.config.get("LAST_NEWS", [])
-
-    combined_text = ""
-
-    for sid in selected_ids:
-        idx = int(sid)
-        combined_text += news_list[idx]["heading"] + ". "
-        combined_text += news_list[idx]["text"] + " "
-
-    final_summary = generate_combined_summary(combined_text)
-
-    char_count = len(final_summary)
-    slides = max(1, math.ceil(char_count / 130))
-    seconds = round(60 / slides, 2)
-
-    return render_template_string(
-        HTML_PAGE,
-        sources=get_sources(),
-        news=news_list,
-        final_summary=final_summary,
-        char_count=char_count,
-        slides=slides,
-        seconds=seconds
     )
 
 # =========================
