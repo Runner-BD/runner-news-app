@@ -117,15 +117,18 @@ def smart_summary(text):
 # ===============================
 # ROUTES
 # ===============================
+
 @app.route("/")
 def home():
     return render_template_string(
         TEMPLATE,
         sources=SAVED_SOURCES,
         news_list=LAST_FETCHED_NEWS,
-        final_summary=None
+        final_summary=None,
+        draft_summary=None
     )
 
+# ===============================
 
 @app.route("/add_source", methods=["POST"])
 def add_source():
@@ -230,15 +233,29 @@ def generate_selected():
             pass
 
     combined_text = " ".join(combined_parts)
-    final_summary = smart_summary(combined_text)
+    draft_summary = smart_summary(combined_text)
 
     return render_template_string(
         TEMPLATE,
         sources=SAVED_SOURCES,
         news_list=LAST_FETCHED_NEWS,
-        final_summary=final_summary
+        final_summary=None,
+        draft_summary=draft_summary
     )
 
+# ===============================
+
+@app.route("/finalize_summary", methods=["POST"])
+def finalize_summary():
+    edited_summary = request.form.get("edited_summary", "")
+
+    return render_template_string(
+        TEMPLATE,
+        sources=SAVED_SOURCES,
+        news_list=LAST_FETCHED_NEWS,
+        final_summary=edited_summary,
+        draft_summary=None
+    )
 
 # ===============================
 # TEMPLATE
@@ -285,6 +302,16 @@ TEMPLATE = """
 </form>
 {% endif %}
 
+{% if draft_summary %}
+<hr>
+<h2>📝 Edit Summary (Optional but Recommended)</h2>
+
+<form method="post" action="/finalize_summary">
+  <textarea name="edited_summary" rows="12" style="width:100%;">{{ draft_summary }}</textarea><br><br>
+  <button type="submit">✅ Finalize Summary</button>
+</form>
+{% endif %}
+
 {% if final_summary %}
 <hr>
 <h2>📊 Final News Summary</h2>
@@ -295,4 +322,5 @@ TEMPLATE = """
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
