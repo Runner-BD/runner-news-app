@@ -1,89 +1,105 @@
 from flask import Flask, render_template_string, request
 import feedparser
 import re
+import html
 
 app = Flask(__name__)
 
-# ===============================
-# GLOBAL STORAGE
-# ===============================
 SAVED_SOURCES = []
 LAST_FETCHED_NEWS = []
 
 # ===============================
-# CLEAN TEXT FUNCTION
+# CLEAN TEXT (STRONG VERSION)
 # ===============================
 def clean_text(text):
     if not text:
         return ""
 
-    # remove HTML
+    # decode HTML entities  ✅ VERY IMPORTANT
+    text = html.unescape(text)
+
+    # remove HTML tags
     text = re.sub(r"<.*?>", "", text)
 
-    # remove "আরও পড়ুন"
+    # remove 'আরও পড়ুন'
     text = re.sub(r"আরও পড়ুন[:：]?.*", "", text)
 
-    # remove extra spaces
+    # remove weird unicode spaces
+    text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
+
+    # normalize spaces
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
 # ===============================
-# FREE SMART SUMMARY (LEVEL 1)
+# SMART BANGLA SUMMARY (FREE)
 # ===============================
-def free_smart_summary(text):
-    sentences = re.split(r"[।!?]", text)
-
-    important = []
-    keywords = ["নিহত", "হামলা", "বিস্ফোরণ", "সংঘর্ষ", "গ্রেফতার"]
-
-    for s in sentences:
-        if any(k in s for k in keywords):
-            important.append(s.strip())
-
-    if not important:
-        important = sentences[:3]
-
-    summary = "। ".join(important).strip()
-
-    # character control
-    if len(summary) > 900:
-        summary = summary[:900]
-
-    return summary
-
-
-# ===============================
-# COMBINED SUMMARY ENGINE
-# ===============================
-def generate_combined_summary(text):
+def smart_summary(text):
     TARGET_MIN = 650
     TARGET_MAX = 900
 
-    summary = free_smart_summary(text)
+    sentences = re.split(r"[।!?]", text)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
 
-    if len(summary) > TARGET_MAX:
-        summary = summary[:TARGET_MAX]
+    # priority keywords
+    priority_words = [
+        "নিহত","হামলা","বিস্ফোরণ","সংঘর্ষ",
+        "গ্রেফতার","মারা","ক্ষেপণাস্ত্র","যুদ্ধ"
+    ]
+
+    scored = []
+
+    for s in sentences:
+        score = sum(1 for w in priority_words if w in s)
+        scored.append((score, s))
+
+    # sort by importance
+    scored.sort(reverse=True, key=lambda x: (x[0], len(x[1])))
+
+    selected = []
+    total_len = 0
+
+    for score, sent in scored:
+        if total_len < TARGET_MAX:
+            selected.append(sent)
+            total_len += len(sent)
+        else:
+            break
+
+    # fallback if empty
+    if not selected:
+        selected = sentences[:5]
+
+    summary = "। ".join(selected).strip()
+
+    # enforce minimum length
+    if len(summary) < TARGET_MIN and len(sentences) > len(selected):
+        for s in sentences[len(selected):]:
+            summary += "। " + s
+            if len(summary) >= TARGET_MIN:
+                break
+
+    # hard cap
+    summary = summary[:TARGET_MAX]
 
     return summary
 
 
 # ===============================
-# HOME PAGE
+# ROUTES
 # ===============================
 @app.route("/")
 def home():
-    return render_template_string(TEMPLATE,
+    return render_template_string(
+        TEMPLATE,
         sources=SAVED_SOURCES,
         news_list=LAST_FETCHED_NEWS,
         final_summary=None
     )
 
 
-# ===============================
-# ADD SOURCE
-# ===============================
 @app.route("/add_source", methods=["POST"])
 def add_source():
     url = request.form.get("rss_url")
@@ -98,9 +114,6 @@ def add_source():
     return home()
 
 
-# ===============================
-# DELETE SOURCE
-# ===============================
 @app.route("/delete_source/<int:index>")
 def delete_source(index):
     if 0 <= index < len(SAVED_SOURCES):
@@ -108,19 +121,16 @@ def delete_source(index):
     return home()
 
 
-# ===============================
-# FETCH NEWS
-# ===============================
 @app.route("/fetch_news")
 def fetch_news():
     global LAST_FETCHED_NEWS
     LAST_FETCHED_NEWS = []
 
-    for src in SAVED_SOURCES:
+    for src in SAVAVED_SOURCES:
         feed = feedparser.parse(src["url"])
         keywords = [k.strip() for k in src["keywords"].split(",") if k.strip()]
 
-        for entry in feed.entries[:15]:
+        for entry in feed.entries[:20]:
             title = clean_text(entry.get("title", ""))
             summary = clean_text(entry.get("summary", ""))
 
@@ -132,16 +142,13 @@ def fetch_news():
 
             LAST_FETCHED_NEWS.append({
                 "title": title,
-                "summary": summary[:300],
+                "summary": summary[:400],
                 "source": src["url"]
             })
 
     return home()
 
 
-# ===============================
-# GENERATE SELECTED SUMMARY
-# ===============================
 @app.route("/generate_selected", methods=["POST"])
 def generate_selected():
     selected = request.form.getlist("selected_news")
@@ -159,9 +166,10 @@ def generate_selected():
             pass
 
     combined_text = " ".join(combined_parts)
-    final_summary = generate_combined_summary(combined_text)
+    final_summary = smart_summary(combined_text)
 
-    return render_template_string(TEMPLATE,
+    return render_template_string(
+        TEMPLATE,
         sources=SAVED_SOURCES,
         news_list=LAST_FETCHED_NEWS,
         final_summary=final_summary
@@ -169,7 +177,7 @@ def generate_selected():
 
 
 # ===============================
-# SIMPLE UI TEMPLATE
+# TEMPLATE
 # ===============================
 TEMPLATE = """
 <h1>Runner News Dashboard</h1>
@@ -201,7 +209,6 @@ TEMPLATE = """
     <strong>{{ news.title }}</strong>
   </label>
   <p>{{ news.summary }}</p>
-  <small>{{ news.source }}</small>
 </div>
 {% endfor %}
 
@@ -217,8 +224,5 @@ TEMPLATE = """
 {% endif %}
 """
 
-# ===============================
-# RUN
-# ===============================
 if __name__ == "__main__":
     app.run(debug=True)
