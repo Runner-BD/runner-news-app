@@ -2,6 +2,7 @@ from flask import Flask, render_template_string, request
 import feedparser
 import re
 import html
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -9,32 +10,54 @@ SAVED_SOURCES = []
 LAST_FETCHED_NEWS = []
 
 # ===============================
-# CLEAN TEXT (STRONG VERSION)
+# CLEAN TEXT
 # ===============================
 def clean_text(text):
     if not text:
         return ""
 
-    # decode HTML entities  ✅ VERY IMPORTANT
     text = html.unescape(text)
-
-    # remove HTML tags
     text = re.sub(r"<.*?>", "", text)
-
-    # remove 'আরও পড়ুন'
     text = re.sub(r"আরও পড়ুন[:：]?.*", "", text)
-
-    # remove weird unicode spaces
     text = re.sub(r"[\u200b\u200c\u200d\ufeff]", "", text)
-
-    # normalize spaces
     text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
 # ===============================
-# SMART BANGLA SUMMARY (FREE)
+# PRIORITY SCORING
+# ===============================
+def get_priority(text):
+    high_words = [
+        "নিহত","হামলা","বিস্ফোরণ","যুদ্ধ",
+        "ক্ষেপণাস্ত্র","সংঘর্ষ","মারা গেছে"
+    ]
+
+    medium_words = [
+        "গ্রেফতার","নির্বাচন","ঘোষণা","বৈঠক"
+    ]
+
+    score = 0
+
+    for w in high_words:
+        if w in text:
+            score += 3
+
+    for w in medium_words:
+        if w in text:
+            score += 1
+
+    if score >= 3:
+        return "HIGH", score
+    elif score >= 1:
+        return "MEDIUM", score
+    else:
+        return "LOW", score
+
+
+# ===============================
+# SMART BANGLA SUMMARY
 # ===============================
 def smart_summary(text):
     TARGET_MIN = 650
@@ -43,10 +66,9 @@ def smart_summary(text):
     sentences = re.split(r"[।!?]", text)
     sentences = [s.strip() for s in sentences if len(s.strip()) > 20]
 
-    # priority keywords
     priority_words = [
         "নিহত","হামলা","বিস্ফোরণ","সংঘর্ষ",
-        "গ্রেফতার","মারা","ক্ষেপণাস্ত্র","যুদ্ধ"
+        "গ্রেফতার","ক্ষেপণাস্ত্র","যুদ্ধ"
     ]
 
     scored = []
@@ -55,7 +77,6 @@ def smart_summary(text):
         score = sum(1 for w in priority_words if w in s)
         scored.append((score, s))
 
-    # sort by importance
     scored.sort(reverse=True, key=lambda x: (x[0], len(x[1])))
 
     selected = []
@@ -68,20 +89,18 @@ def smart_summary(text):
         else:
             break
 
-    # fallback if empty
     if not selected:
         selected = sentences[:5]
 
     summary = "। ".join(selected).strip()
 
-    # enforce minimum length
-    if len(summary) < TARGET_MIN and len(sentences) > len(selected):
-        for s in sentences[len(selected):]:
-            summary += "। " + s
-            if len(summary) >= TARGET_MIN:
-                break
+    if len(summary) < TARGET_MIN:
+        for s in sentences:
+            if s not in selected:
+                summary += "। " + s
+                if len(summary) >= TARGET_MIN:
+                    break
 
-    # hard cap
     summary = summary[:TARGET_MAX]
 
     return summary
@@ -108,7 +127,7 @@ def add_source():
     if url:
         SAVED_SOURCES.append({
             "url": url.strip(),
-            "keywords": keywords.strip()
+            "keywords": keywords.strip().lower()
         })
 
     return home()
@@ -121,30 +140,58 @@ def delete_source(index):
     return home()
 
 
+# ===============================
+# FETCH NEWS (PRO LEVEL)
+# ===============================
 @app.route("/fetch_news")
 def fetch_news():
     global LAST_FETCHED_NEWS
     LAST_FETCHED_NEWS = []
 
-    for src in SAVAVED_SOURCES:
-        feed = feedparser.parse(src["url"])
-        keywords = [k.strip() for k in src["keywords"].split(",") if k.strip()]
+    try:
+        for src in SAVED_SOURCES:
+            feed = feedparser.parse(src["url"])
+            keywords = [k.strip() for k in src["keywords"].split(",") if k.strip()]
 
-        for entry in feed.entries[:20]:
-            title = clean_text(entry.get("title", ""))
-            summary = clean_text(entry.get("summary", ""))
+            for entry in feed.entries[:25]:
+                title = clean_text(entry.get("title", ""))
+                summary = clean_text(entry.get("summary", ""))
 
-            full_text = title + " " + summary
+                full_text = (title + " " + summary).lower()
 
-            if keywords:
-                if not any(k in full_text for k in keywords):
-                    continue
+                # keyword filter
+                if keywords:
+                    if not any(k.lower() in full_text for k in keywords):
+                        continue
 
-            LAST_FETCHED_NEWS.append({
-                "title": title,
-                "summary": summary[:400],
-                "source": src["url"]
-            })
+                # priority
+                priority, score = get_priority(full_text)
+
+                # date
+                try:
+                    published = entry.get("published", "")
+                    date_obj = datetime(*entry.published_parsed[:6])
+                    nice_date = date_obj.strftime("%d %b %Y %I:%M %p")
+                except:
+                    nice_date = "Unknown"
+
+                LAST_FETCHED_NEWS.append({
+                    "title": title,
+                    "summary": summary[:350],
+                    "source": src["url"],
+                    "priority": priority,
+                    "score": score,
+                    "date": nice_date
+                })
+
+        # 🔥 SORT BY PRIORITY + SCORE
+        LAST_FETCHED_NEWS.sort(
+            key=lambda x: (x["score"]),
+            reverse=True
+        )
+
+    except Exception as e:
+        print("❌ FETCH ERROR:", e)
 
     return home()
 
@@ -209,6 +256,11 @@ TEMPLATE = """
     <strong>{{ news.title }}</strong>
   </label>
   <p>{{ news.summary }}</p>
+  <small>
+    Priority: <b>{{ news.priority }}</b> |
+    Date: {{ news.date }} |
+    Source: {{ news.source }}
+  </small>
 </div>
 {% endfor %}
 
