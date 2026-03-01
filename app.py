@@ -1,314 +1,224 @@
-import os
-import re
-import sqlite3
+from flask import Flask, render_template_string, request
 import feedparser
-import html
+import re
 
-from flask import Flask, request, redirect, render_template_string
-from openai import OpenAI
-
-# =========================
-# FLASK SETUP
-# =========================
 app = Flask(__name__)
-DB_NAME = "news.db"
 
-# =========================
-# OPENAI SETUP (SAFE)
-# =========================
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# ===============================
+# GLOBAL STORAGE
+# ===============================
+SAVED_SOURCES = []
+LAST_FETCHED_NEWS = []
 
-client = None
-if OPENAI_API_KEY:
-    try:
-        client = OpenAI(api_key=OPENAI_API_KEY)
-        print("✅ OpenAI client initialized")
-    except Exception as e:
-        print("❌ OpenAI init failed:", e)
-        client = None
-else:
-    print("⚠️ OPENAI_API_KEY missing — using free mode")
-
-# =========================
-# DATABASE
-# =========================
-def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS sources (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            url TEXT UNIQUE,
-            keywords TEXT
-        )
-    """)
-
-    conn.commit()
-    conn.close()
-
-init_db()
-
-# =========================
-# HELPERS
-# =========================
-def get_sources():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("SELECT * FROM sources ORDER BY id DESC")
-    data = c.fetchall()
-    conn.close()
-    return data
-
-
-def delete_source_db(source_id):
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-    c.execute("DELETE FROM sources WHERE id=?", (source_id,))
-    conn.commit()
-    conn.close()
-
-
-def clean_html(text):
-    if not text:
-        return ""
-    text = re.sub("<[^<]+?>", "", text)
-    text = html.unescape(text)
-    return text.strip()
-
-
-# ✅ NEW — REMOVE NEWS JUNK
-def remove_news_junk(text):
-    """Remove common Bangla news junk phrases"""
+# ===============================
+# CLEAN TEXT FUNCTION
+# ===============================
+def clean_text(text):
     if not text:
         return ""
 
-    junk_patterns = [
-        r"আরও পড়ুন[:：].*",
-        r"বিস্তারিত পড়ুন[:：].*",
-        r"Read more[:：].*",
-        r"Advertisement.*",
-        r"এ সম্পর্কিত.*",
-    ]
+    # remove HTML
+    text = re.sub(r"<.*?>", "", text)
 
-    for pattern in junk_patterns:
-        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
+    # remove "আরও পড়ুন"
+    text = re.sub(r"আরও পড়ুন[:：]?.*", "", text)
+
+    # remove extra spaces
+    text = re.sub(r"\s+", " ", text)
 
     return text.strip()
 
 
-def keyword_match(title, description, keyword_string):
-    """Check if any keyword exists in title or description"""
-    if not keyword_string:
-        return True
+# ===============================
+# FREE SMART SUMMARY (LEVEL 1)
+# ===============================
+def free_smart_summary(text):
+    sentences = re.split(r"[।!?]", text)
 
-    text = f"{title} {description}".lower()
-    keywords = [k.strip().lower() for k in keyword_string.split(",") if k.strip()]
+    important = []
+    keywords = ["নিহত", "হামলা", "বিস্ফোরণ", "সংঘর্ষ", "গ্রেফতার"]
 
-    return any(k in text for k in keywords)
+    for s in sentences:
+        if any(k in s for k in keywords):
+            important.append(s.strip())
 
-# =========================
-# FREE SMART SUMMARY
-# =========================
-def free_smart_summary(title, description=""):
-    text = description if description else title
-    text = remove_news_junk(clean_html(text))
+    if not important:
+        important = sentences[:3]
 
-    if not text:
-        return "সারাংশ তৈরি করা যায়নি।"
+    summary = "। ".join(important).strip()
 
-    if len(text) > 260:
-        text = text[:260] + "..."
+    # character control
+    if len(summary) > 900:
+        summary = summary[:900]
 
-    return f"সংক্ষিপ্ত সংবাদ: {text}"
+    return summary
 
-# =========================
-# AI SUMMARY (LEVEL-1 IMPROVED)
-# =========================
-def generate_bangla_summary(title, description=""):
-    cleaned_description = remove_news_junk(clean_html(description))
 
-    if not client:
-        return free_smart_summary(title, cleaned_description)
+# ===============================
+# COMBINED SUMMARY ENGINE
+# ===============================
+def generate_combined_summary(text):
+    TARGET_MIN = 650
+    TARGET_MAX = 900
 
-    try:
-        content_text = f"""
-তুমি একজন পেশাদার বাংলা নিউজ সম্পাদক।
+    summary = free_smart_summary(text)
 
-নিচের সংবাদটি ৬৫০-৯০০ অক্ষরের মধ্যে সংক্ষিপ্ত, তথ্যভিত্তিক এবং পরিষ্কার বাংলায় লিখো।
+    if len(summary) > TARGET_MAX:
+        summary = summary[:TARGET_MAX]
 
-নিয়ম:
-- অপ্রয়োজনীয় কথা নয়
-- কোনো বিজ্ঞাপন নয়
-- 'আরও পড়ুন' টাইপ লেখা বাদ দাও
-- নিউজ স্টাইল বজায় রাখো
-- একই তথ্য পুনরাবৃত্তি করো না
+    return summary
 
-শিরোনাম: {title}
-বিস্তারিত: {cleaned_description}
-"""
 
-        response = client.chat.completions.create(
-            model="gpt-4o-mini",
-            messages=[{"role": "user", "content": content_text}],
-            temperature=0.4,
-            max_tokens=400,
-        )
+# ===============================
+# HOME PAGE
+# ===============================
+@app.route("/")
+def home():
+    return render_template_string(TEMPLATE,
+        sources=SAVED_SOURCES,
+        news_list=LAST_FETCHED_NEWS,
+        final_summary=None
+    )
 
-        text = response.choices[0].message.content.strip()
 
-        if not text:
-            return free_smart_summary(title, cleaned_description)
+# ===============================
+# ADD SOURCE
+# ===============================
+@app.route("/add_source", methods=["POST"])
+def add_source():
+    url = request.form.get("rss_url")
+    keywords = request.form.get("keywords", "")
 
-        return text
+    if url:
+        SAVED_SOURCES.append({
+            "url": url.strip(),
+            "keywords": keywords.strip()
+        })
 
-    except Exception as e:
-        print("❌ OPENAI ERROR:", e)
-        return free_smart_summary(title, cleaned_description)
+    return home()
 
-# =========================
-# HTML
-# =========================
-HTML_PAGE = """
+
+# ===============================
+# DELETE SOURCE
+# ===============================
+@app.route("/delete_source/<int:index>")
+def delete_source(index):
+    if 0 <= index < len(SAVED_SOURCES):
+        SAVED_SOURCES.pop(index)
+    return home()
+
+
+# ===============================
+# FETCH NEWS
+# ===============================
+@app.route("/fetch_news")
+def fetch_news():
+    global LAST_FETCHED_NEWS
+    LAST_FETCHED_NEWS = []
+
+    for src in SAVED_SOURCES:
+        feed = feedparser.parse(src["url"])
+        keywords = [k.strip() for k in src["keywords"].split(",") if k.strip()]
+
+        for entry in feed.entries[:15]:
+            title = clean_text(entry.get("title", ""))
+            summary = clean_text(entry.get("summary", ""))
+
+            full_text = title + " " + summary
+
+            if keywords:
+                if not any(k in full_text for k in keywords):
+                    continue
+
+            LAST_FETCHED_NEWS.append({
+                "title": title,
+                "summary": summary[:300],
+                "source": src["url"]
+            })
+
+    return home()
+
+
+# ===============================
+# GENERATE SELECTED SUMMARY
+# ===============================
+@app.route("/generate_selected", methods=["POST"])
+def generate_selected():
+    selected = request.form.getlist("selected_news")
+
+    if not selected:
+        return home()
+
+    combined_parts = []
+
+    for idx in selected:
+        try:
+            item = LAST_FETCHED_NEWS[int(idx)]
+            combined_parts.append(item["title"] + " " + item["summary"])
+        except:
+            pass
+
+    combined_text = " ".join(combined_parts)
+    final_summary = generate_combined_summary(combined_text)
+
+    return render_template_string(TEMPLATE,
+        sources=SAVED_SOURCES,
+        news_list=LAST_FETCHED_NEWS,
+        final_summary=final_summary
+    )
+
+
+# ===============================
+# SIMPLE UI TEMPLATE
+# ===============================
+TEMPLATE = """
 <h1>Runner News Dashboard</h1>
 
 <h2>Add RSS Source</h2>
 <form method="post" action="/add_source">
-    RSS URL: <input name="url" size="50">
-    Keywords: <input name="keywords" size="50">
-    <button type="submit">Add Source</button>
+  RSS URL: <input name="rss_url" size="50">
+  Keywords: <input name="keywords" size="40">
+  <button>Add Source</button>
 </form>
 
 <h2>Saved Sources</h2>
 {% for s in sources %}
-<p>
-{{s[1]}} | Keywords: {{s[2]}}
-<form method="post" action="/delete_source" style="display:inline;">
-    <input type="hidden" name="id" value="{{s[0]}}">
-    <button type="submit">❌ Delete</button>
-</form>
-</p>
+  {{ s.url }} | Keywords: {{ s.keywords }}
+  <a href="/delete_source/{{ loop.index0 }}">❌ Delete</a><br><br>
 {% endfor %}
 
-<form method="post" action="/fetch">
-    <button type="submit">🚀 Fetch News</button>
-</form>
+<a href="/fetch_news">🚀 Fetch News</a>
 
-{% if news %}
-<h2>Generated Bangla News</h2>
-{% for n in news %}
+{% if news_list %}
 <hr>
-<b>Heading:</b> {{n.heading}}<br><br>
+<form method="post" action="/generate_selected">
+<h2>Select News</h2>
 
-{{n.body}}<br><br>
-
-<b>Source:</b> {{n.source}}<br>
-<b>Published:</b> {{n.published}}<br><br>
-
-<a href="{{n.link}}" target="_blank">Open Source</a>
+{% for news in news_list %}
+<div style="border:1px solid #ccc;padding:10px;margin:10px 0;">
+  <label>
+    <input type="checkbox" name="selected_news" value="{{ loop.index0 }}">
+    <strong>{{ news.title }}</strong>
+  </label>
+  <p>{{ news.summary }}</p>
+  <small>{{ news.source }}</small>
+</div>
 {% endfor %}
+
+<button type="submit">🧠 Generate Final Summary</button>
+</form>
 {% endif %}
 
-<p>⚠️ If AI is unavailable, a basic summary is shown.</p>
+{% if final_summary %}
+<hr>
+<h2>📊 Final News Summary</h2>
+<p>{{ final_summary }}</p>
+<p><b>Total Characters:</b> {{ final_summary|length }}</p>
+{% endif %}
 """
 
-# =========================
-# ROUTES
-# =========================
-@app.route("/")
-def home():
-    sources = get_sources()
-    return render_template_string(HTML_PAGE, sources=sources, news=None)
-
-
-@app.route("/add_source", methods=["POST"])
-def add_source():
-    url = request.form.get("url", "").strip()
-    keywords = request.form.get("keywords", "").strip()
-
-    if not url:
-        return redirect("/")
-
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        c = conn.cursor()
-        c.execute(
-            "INSERT OR IGNORE INTO sources (url, keywords) VALUES (?, ?)",
-            (url, keywords)
-        )
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        print("❌ INSERT ERROR:", e)
-
-    return redirect("/")
-
-
-@app.route("/delete_source", methods=["POST"])
-def delete_source():
-    source_id = request.form.get("id")
-    if source_id:
-        delete_source_db(source_id)
-    return redirect("/")
-
-
-@app.route("/fetch", methods=["POST"])
-def fetch_news():
-    sources = get_sources()
-    all_news = []
-
-    try:
-        for src in sources:
-            rss_url = src[1]
-            keyword_string = src[2] or ""
-
-            feed = feedparser.parse(rss_url)
-
-            if not feed.entries:
-                continue
-
-            source_name = rss_url.replace("https://", "").replace("http://", "").split("/")[0]
-
-            for entry in feed.entries[:15]:
-                title = entry.get("title", "")
-                link = entry.get("link", "#")
-
-                description = ""
-                if hasattr(entry, "summary"):
-                    description = entry.summary
-                elif hasattr(entry, "description"):
-                    description = entry.description
-
-                published = entry.get("published", "") or entry.get("pubDate", "")
-
-                if not title:
-                    continue
-
-                if not keyword_match(title, description, keyword_string):
-                    continue
-
-                summary = generate_bangla_summary(title, description)
-
-                all_news.append({
-                    "heading": title,
-                    "body": summary,
-                    "link": link,
-                    "source": source_name,
-                    "published": published
-                })
-
-    except Exception as e:
-        print("❌ FETCH ERROR:", e)
-
-    return render_template_string(
-        HTML_PAGE,
-        sources=sources,
-        news=all_news
-    )
-
-# =========================
-# MAIN
-# =========================
+# ===============================
+# RUN
+# ===============================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    app.run(debug=True)
