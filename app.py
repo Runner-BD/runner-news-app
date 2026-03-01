@@ -80,7 +80,7 @@ def clean_html(text):
 def keyword_match(title, description, keyword_string):
     """Check if any keyword exists in title or description"""
     if not keyword_string:
-        return True
+        return False
 
     text = f"{title} {description}".lower()
     keywords = [k.strip().lower() for k in keyword_string.split(",") if k.strip()]
@@ -238,7 +238,10 @@ def fetch_news():
 
             source_name = rss_url.replace("https://", "").replace("http://", "").split("/")[0]
 
-            for entry in feed.entries[:15]:
+            matched_count = 0
+            fallback_count = 0
+
+            for entry in feed.entries[:20]:
                 title = entry.get("title", "")
                 link = entry.get("link", "#")
 
@@ -253,19 +256,34 @@ def fetch_news():
                 if not title:
                     continue
 
-                # ✅ KEYWORD FILTER (FIXED)
-                if not keyword_match(title, description, keyword_string):
+                is_match = keyword_match(title, description, keyword_string)
+
+                # ✅ PRIORITY NEWS
+                if is_match and matched_count < 5:
+                    summary = generate_bangla_summary(title, description)
+
+                    all_news.append({
+                        "heading": title,
+                        "body": summary,
+                        "link": link,
+                        "source": source_name,
+                        "published": published
+                    })
+                    matched_count += 1
                     continue
 
-                summary = generate_bangla_summary(title, description)
+                # ✅ FALLBACK NEWS (prevents empty screen)
+                if not is_match and fallback_count < 3:
+                    summary = generate_bangla_summary(title, description)
 
-                all_news.append({
-                    "heading": title,
-                    "body": summary,
-                    "link": link,
-                    "source": source_name,
-                    "published": published
-                })
+                    all_news.append({
+                        "heading": title,
+                        "body": summary,
+                        "link": link,
+                        "source": source_name,
+                        "published": published
+                    })
+                    fallback_count += 1
 
     except Exception as e:
         print("❌ FETCH ERROR:", e)
