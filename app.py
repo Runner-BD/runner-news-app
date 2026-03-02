@@ -32,7 +32,7 @@ def clean_text(text):
 def get_priority(text):
     high_words = [
         "নিহত","হামলা","বিস্ফোরণ","যুদ্ধ",
-        "ক্ষেপণাস্ত্র","সংঘর্ষ","মারা গেছে"
+        "ক্ষেপণাস্ত্র","সংঘর্ষ","মারা"
     ]
 
     medium_words = [
@@ -58,110 +58,86 @@ def get_priority(text):
 
 
 # ===============================
-# 🔥 IMPROVED SMART SUMMARY (FREE BEST)
+# 🔥 SMART SUMMARY ENGINE (DRAFT)
+# 1200–1800 chars for editing
 # ===============================
-
-def smart_summary(text):
-    TARGET_MIN = 650
-    TARGET_MAX = 900
+def smart_summary(text, target_min=1200, target_max=1800):
+    if not text:
+        return ""
 
     sentences = re.split(r"[।!?]", text)
     sentences = [clean_text(s) for s in sentences if len(s.strip()) > 25]
 
     if not sentences:
-        return text[:TARGET_MAX]
+        return text[:target_max]
 
     priority_words = [
         "নিহত","হামলা","বিস্ফোরণ","সংঘর্ষ",
-        "ক্ষেপণাস্ত্র","যুদ্ধ","গ্রেফতার"
+        "ক্ষেপণাস্ত্র","যুদ্ধ","আহত","মারা"
     ]
 
     scored = []
 
-    for s in sentences:
-        score = sum(2 for w in priority_words if w in s)
-        score += len(s) / 120
-        scored.append((score, s))
+    for i, s in enumerate(sentences):
+        score = 0
 
-    scored.sort(reverse=True, key=lambda x: x[0])
+        score += sum(3 for w in priority_words if w in s)
 
-    # 🔥 build segment-style summary
-    summary_parts = []
-    total_len = 0
-    used = set()
+        if i < 2:
+            score += 2
 
-    for score, sent in scored:
-        if sent in used:
-            continue
+        score += min(len(s) // 60, 3)
 
-        # short headline from sentence
-        short_title = sent[:70].strip()
+        scored.append((score, i, s))
 
-        block = f"\n\n🔹 {short_title}\n{sent}"
+    scored.sort(reverse=True)
 
-        if total_len + len(block) > TARGET_MAX:
-            continue
+    selected_indexes = sorted([i for _, i, _ in scored[:14]])
+    selected_sentences = [sentences[i] for i in selected_indexes]
 
-        summary_parts.append(block)
-        used.add(sent)
-        total_len += len(block)
+    summary = "। ".join(selected_sentences).strip()
 
-        if total_len >= TARGET_MIN:
-            break
+    if len(summary) < target_min:
+        for s in sentences:
+            if s not in selected_sentences:
+                summary += "। " + s
+                if len(summary) >= target_min:
+                    break
 
-    final_summary = "".join(summary_parts).strip()
-    final_summary = final_summary[:TARGET_MAX]
+    return summary[:target_max]
 
-    return final_summary
+
 # ===============================
-# ===============================
-# PROFESSIONAL MULTI-SEGMENT SUMMARY
+# PROFESSIONAL MULTI-SEGMENT
 # ===============================
 def build_multi_segment_summary(selected_items):
-    TARGET_MIN = 650
-    TARGET_MAX = 900
-
     segments = []
-    total_len = 0
 
     for item in selected_items:
         title = clean_text(item["title"])
         body = clean_text(item["summary"])
 
-        # create short body summary
-        short_body = smart_summary(title + " " + body)
+        detailed = smart_summary(title + " " + body, 350, 550)
 
-        segment = f"{title}\n{short_body}"
+        segment = f"🔹 {title}\n{detailed}"
+        segments.append(segment)
 
-        if total_len + len(segment) <= TARGET_MAX:
-            segments.append(segment)
-            total_len += len(segment)
-        else:
-            break
+    return "\n\n".join(segments)
 
-    final_text = "\n\n".join(segments)
-
-    # ensure minimum length
-    if len(final_text) < TARGET_MIN and segments:
-        final_text = final_text[:TARGET_MAX]
-
-    return final_text
 
 # ===============================
 # ROUTES
 # ===============================
-
 @app.route("/")
 def home():
     return render_template_string(
         TEMPLATE,
         sources=SAVED_SOURCES,
         news_list=LAST_FETCHED_NEWS,
-        final_summary=None,
-        draft_summary=None
+        draft_summary=None,
+        final_summary=None
     )
 
-# ===============================
 
 @app.route("/add_source", methods=["POST"])
 def add_source():
@@ -185,7 +161,7 @@ def delete_source(index):
 
 
 # ===============================
-# 🚀 FETCH NEWS — FIXED MULTI-SOURCE
+# FETCH NEWS
 # ===============================
 @app.route("/fetch_news")
 def fetch_news():
@@ -197,7 +173,7 @@ def fetch_news():
             feed = feedparser.parse(src["url"])
             keywords = [k.strip().lower() for k in src["keywords"].split(",") if k.strip()]
 
-            for entry in feed.entries[:35]:
+            for entry in feed.entries[:40]:
                 title = clean_text(entry.get("title", ""))
                 summary = clean_text(entry.get("summary", ""))
 
@@ -206,16 +182,13 @@ def fetch_news():
 
                 full_text = (title + " " + summary).lower()
 
-                # ✅ smarter keyword logic
                 keyword_match = any(k in full_text for k in keywords) if keywords else True
 
                 priority, score = get_priority(full_text)
 
-                # allow more diversity
                 if keywords and not keyword_match and priority != "HIGH":
                     continue
 
-                # safe date
                 try:
                     if hasattr(entry, "published_parsed") and entry.published_parsed:
                         date_obj = datetime(*entry.published_parsed[:6])
@@ -227,14 +200,13 @@ def fetch_news():
 
                 LAST_FETCHED_NEWS.append({
                     "title": title,
-                    "summary": summary[:350],
+                    "summary": summary[:400],
                     "source": src["url"],
                     "priority": priority,
                     "score": score,
                     "date": nice_date
                 })
 
-        # ✅ strong professional sorting
         priority_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
         LAST_FETCHED_NEWS.sort(
@@ -247,8 +219,10 @@ def fetch_news():
 
     return home()
 
-# ===============================
 
+# ===============================
+# GENERATE DRAFT
+# ===============================
 @app.route("/generate_selected", methods=["POST"])
 def generate_selected():
     selected_indexes = request.form.getlist("selected_news")
@@ -264,7 +238,6 @@ def generate_selected():
         except:
             pass
 
-    # ✅ NEW professional builder
     draft_summary = build_multi_segment_summary(selected_items)
 
     return render_template_string(
@@ -275,8 +248,10 @@ def generate_selected():
         final_summary=None
     )
 
-# ===============================
 
+# ===============================
+# FINALIZE
+# ===============================
 @app.route("/finalize_summary", methods=["POST"])
 def finalize_summary():
     edited_summary = request.form.get("edited_summary", "")
@@ -285,12 +260,13 @@ def finalize_summary():
         TEMPLATE,
         sources=SAVED_SOURCES,
         news_list=LAST_FETCHED_NEWS,
-        final_summary=edited_summary,
-        draft_summary=None
+        draft_summary=None,
+        final_summary=edited_summary
     )
 
+
 # ===============================
-# TEMPLATE
+# TEMPLATE (CLEAN + PROFESSIONAL)
 # ===============================
 TEMPLATE = """
 <h1>Runner News Dashboard</h1>
@@ -330,32 +306,19 @@ TEMPLATE = """
 </div>
 {% endfor %}
 
-<button type="submit">🧠 Generate Final Summary</button>
+<button type="submit">🧠 Generate Draft Summary</button>
 </form>
 {% endif %}
 
 {% if draft_summary %}
 <hr>
-<h2>📝 Edit Summary (Optional but Recommended)</h2>
+<h2>📝 Edit & Compress Summary for Final Video</h2>
 
 <form method="post" action="/finalize_summary">
-  <textarea name="edited_summary" rows="12" style="width:100%;">{{ draft_summary }}</textarea><br><br>
-  <button type="submit">✅ Finalize Summary</button>
-</form>
-{% endif %}
-
-# ===============================
-{% if draft_summary %}
-<hr>
-<h2>📝 Edit Summary (You can modify before final)</h2>
-
-<form method="post" action="/finalize_summary">
-<textarea name="edited_summary" rows="12" style="width:100%;">{{ draft_summary }}</textarea><br><br>
+<textarea name="edited_summary" rows="14" style="width:100%;">{{ draft_summary }}</textarea><br><br>
 <button type="submit">✅ Finalize Summary</button>
 </form>
 {% endif %}
-
-# ===============================
 
 {% if final_summary %}
 <hr>
@@ -367,6 +330,3 @@ TEMPLATE = """
 
 if __name__ == "__main__":
     app.run(debug=True)
-
-
-
