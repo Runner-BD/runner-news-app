@@ -1,3 +1,8 @@
+# =============================================
+# Runner News Dashboard — Level‑2 Lite (STABLE FIX)
+# Copy‑paste the ENTIRE file and run
+# =============================================
+
 from flask import Flask, render_template_string, request
 import feedparser
 import re
@@ -6,12 +11,14 @@ from datetime import datetime
 
 app = Flask(__name__)
 
+# ---------------- GLOBAL STATE ----------------
 SAVED_SOURCES = []
 LAST_FETCHED_NEWS = []
 
-# ===============================
-# CLEAN TEXT
-# ===============================
+
+# =============================================
+# TEXT CLEANER
+# =============================================
 def clean_text(text):
     if not text:
         return ""
@@ -26,9 +33,9 @@ def clean_text(text):
     return text.strip()
 
 
-# ===============================
+# =============================================
 # PRIORITY + VIRAL SCORE
-# ===============================
+# =============================================
 def get_priority_and_viral(text):
     high_words = [
         "নিহত","হামলা","বিস্ফোরণ","যুদ্ধ",
@@ -49,7 +56,7 @@ def get_priority_and_viral(text):
         if w in text:
             score += 2
 
-    # viral boost for numbers
+    # number boost
     if re.search(r"\d+", text):
         score += 1
 
@@ -63,10 +70,9 @@ def get_priority_and_viral(text):
     return priority, score
 
 
-# ===============================
-# 🔥 LEVEL-2 LITE SMART SUMMARY
-# (RICH DRAFT: 1200–1800 chars)
-# ===============================
+# =============================================
+# RICH SUMMARY (EDITOR STAGE)
+# =============================================
 def smart_summary_rich(text):
     TARGET_MIN = 1200
     TARGET_MAX = 1800
@@ -93,19 +99,14 @@ def smart_summary_rich(text):
 
     selected = []
     total_len = 0
-    used = set()
 
     for score, sent in scored:
-        if sent in used:
-            continue
-
         block = sent + "।"
 
         if total_len + len(block) > TARGET_MAX:
             continue
 
         selected.append(block)
-        used.add(sent)
         total_len += len(block)
 
         if total_len >= TARGET_MIN:
@@ -117,9 +118,9 @@ def smart_summary_rich(text):
     return " ".join(selected)[:TARGET_MAX]
 
 
-# ===============================
-# PROFESSIONAL MULTI-SEGMENT
-# ===============================
+# =============================================
+# MULTI‑SEGMENT BUILDER
+# =============================================
 def build_multi_segment_summary(selected_items):
     segments = []
 
@@ -137,9 +138,9 @@ def build_multi_segment_summary(selected_items):
     return "\n\n".join(segments)
 
 
-# ===============================
-# REMOVE DUPLICATE NEWS
-# ===============================
+# =============================================
+# DUPLICATE KILLER
+# =============================================
 def is_duplicate(title, seen_titles):
     base = title[:60].lower()
     if base in seen_titles:
@@ -148,9 +149,9 @@ def is_duplicate(title, seen_titles):
     return False
 
 
-# ===============================
+# =============================================
 # ROUTES
-# ===============================
+# =============================================
 @app.route("/")
 def home():
     return render_template_string(
@@ -183,9 +184,9 @@ def delete_source(index):
     return home()
 
 
-# ===============================
-# 🚀 FETCH NEWS (LEVEL-2 LITE)
-# ===============================
+# =============================================
+# FETCH NEWS (STABLE)
+# =============================================
 @app.route("/fetch_news")
 def fetch_news():
     global LAST_FETCHED_NEWS
@@ -195,6 +196,10 @@ def fetch_news():
     try:
         for src in SAVED_SOURCES:
             feed = feedparser.parse(src["url"])
+
+            if not feed.entries:
+                continue
+
             keywords = [k.strip().lower() for k in src["keywords"].split(",") if k.strip()]
 
             for entry in feed.entries[:40]:
@@ -204,7 +209,6 @@ def fetch_news():
                 if not title:
                     continue
 
-                # duplicate killer
                 if is_duplicate(title, seen_titles):
                     continue
 
@@ -217,13 +221,14 @@ def fetch_news():
                 if keywords and not keyword_match and priority != "HIGH":
                     continue
 
+                # safe date
                 try:
                     if hasattr(entry, "published_parsed") and entry.published_parsed:
                         date_obj = datetime(*entry.published_parsed[:6])
                         nice_date = date_obj.strftime("%d %b %Y %I:%M %p")
                     else:
                         nice_date = "Unknown"
-                except:
+                except Exception:
                     nice_date = "Unknown"
 
                 LAST_FETCHED_NEWS.append({
@@ -235,7 +240,6 @@ def fetch_news():
                     "date": nice_date
                 })
 
-        # 🔥 professional sorting
         priority_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
         LAST_FETCHED_NEWS.sort(
@@ -244,12 +248,12 @@ def fetch_news():
         )
 
     except Exception as e:
-        print("❌ FETCH ERROR:", e)
+        print("FETCH ERROR:", e)
 
     return home()
 
 
-# ===============================
+# =============================================
 @app.route("/generate_selected", methods=["POST"])
 def generate_selected():
     selected_indexes = request.form.getlist("selected_news")
@@ -262,7 +266,7 @@ def generate_selected():
     for idx in selected_indexes:
         try:
             selected_items.append(LAST_FETCHED_NEWS[int(idx)])
-        except:
+        except Exception:
             pass
 
     draft_summary = build_multi_segment_summary(selected_items)
@@ -276,7 +280,7 @@ def generate_selected():
     )
 
 
-# ===============================
+# =============================================
 @app.route("/finalize_summary", methods=["POST"])
 def finalize_summary():
     edited_summary = request.form.get("edited_summary", "")
@@ -290,11 +294,11 @@ def finalize_summary():
     )
 
 
-# ===============================
-# TEMPLATE (CLEAN + PROFESSIONAL)
-# ===============================
+# =============================================
+# TEMPLATE (SAFE + CLEAN)
+# =============================================
 TEMPLATE = """
-<h1>Runner News Dashboard — Level-2 Lite</h1>
+<h1>Runner News Dashboard — Level‑2 Lite</h1>
 
 <h2>Add RSS Source</h2>
 <form method="post" action="/add_source">
@@ -337,8 +341,7 @@ TEMPLATE = """
 
 {% if draft_summary %}
 <hr>
-<h2>📝 Edit Draft (Recommended)</h2>
-
+<h2>📝 Edit Draft</h2>
 <form method="post" action="/finalize_summary">
 <textarea name="edited_summary" rows="16" style="width:100%;">{{ draft_summary }}</textarea><br><br>
 <button type="submit">✅ Finalize Summary</button>
@@ -353,6 +356,8 @@ TEMPLATE = """
 {% endif %}
 """
 
-# ===============================
+
+# =============================================
 if __name__ == "__main__":
-    app.run(debug=True)
+    print("Starting Runner News Dashboard...")
+    app.run(debug=True, port=5000)
