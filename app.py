@@ -113,6 +113,39 @@ def smart_summary(text):
     final_summary = final_summary[:TARGET_MAX]
 
     return final_summary
+# ===============================
+# ===============================
+# PROFESSIONAL MULTI-SEGMENT SUMMARY
+# ===============================
+def build_multi_segment_summary(selected_items):
+    TARGET_MIN = 650
+    TARGET_MAX = 900
+
+    segments = []
+    total_len = 0
+
+    for item in selected_items:
+        title = clean_text(item["title"])
+        body = clean_text(item["summary"])
+
+        # create short body summary
+        short_body = smart_summary(title + " " + body)
+
+        segment = f"{title}\n{short_body}"
+
+        if total_len + len(segment) <= TARGET_MAX:
+            segments.append(segment)
+            total_len += len(segment)
+        else:
+            break
+
+    final_text = "\n\n".join(segments)
+
+    # ensure minimum length
+    if len(final_text) < TARGET_MIN and segments:
+        final_text = final_text[:TARGET_MAX]
+
+    return final_text
 
 # ===============================
 # ROUTES
@@ -218,29 +251,28 @@ def fetch_news():
 
 @app.route("/generate_selected", methods=["POST"])
 def generate_selected():
-    selected = request.form.getlist("selected_news")
+    selected_indexes = request.form.getlist("selected_news")
 
-    if not selected:
+    if not selected_indexes:
         return home()
 
-    combined_parts = []
+    selected_items = []
 
-    for idx in selected:
+    for idx in selected_indexes:
         try:
-            item = LAST_FETCHED_NEWS[int(idx)]
-            combined_parts.append(item["title"] + " " + item["summary"])
+            selected_items.append(LAST_FETCHED_NEWS[int(idx)])
         except:
             pass
 
-    combined_text = " ".join(combined_parts)
-    draft_summary = smart_summary(combined_text)
+    # ✅ NEW professional builder
+    draft_summary = build_multi_segment_summary(selected_items)
 
     return render_template_string(
         TEMPLATE,
         sources=SAVED_SOURCES,
         news_list=LAST_FETCHED_NEWS,
-        final_summary=None,
-        draft_summary=draft_summary
+        draft_summary=draft_summary,
+        final_summary=None
     )
 
 # ===============================
@@ -312,6 +344,19 @@ TEMPLATE = """
 </form>
 {% endif %}
 
+# ===============================
+{% if draft_summary %}
+<hr>
+<h2>📝 Edit Summary (You can modify before final)</h2>
+
+<form method="post" action="/finalize_summary">
+<textarea name="edited_summary" rows="12" style="width:100%;">{{ draft_summary }}</textarea><br><br>
+<button type="submit">✅ Finalize Summary</button>
+</form>
+{% endif %}
+
+# ===============================
+
 {% if final_summary %}
 <hr>
 <h2>📊 Final News Summary</h2>
@@ -322,5 +367,6 @@ TEMPLATE = """
 
 if __name__ == "__main__":
     app.run(debug=True)
+
 
 
