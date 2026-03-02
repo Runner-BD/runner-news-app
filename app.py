@@ -27,9 +27,9 @@ def clean_text(text):
 
 
 # ===============================
-# PRIORITY SCORING
+# PRIORITY + VIRAL SCORE
 # ===============================
-def get_priority(text):
+def get_priority_and_viral(text):
     high_words = [
         "নিহত","হামলা","বিস্ফোরণ","যুদ্ধ",
         "ক্ষেপণাস্ত্র","সংঘর্ষ","মারা গেছে"
@@ -43,29 +43,39 @@ def get_priority(text):
 
     for w in high_words:
         if w in text:
-            score += 3
+            score += 5
 
     for w in medium_words:
         if w in text:
-            score += 1
+            score += 2
 
-    if score >= 3:
-        return "HIGH", score
-    elif score >= 1:
-        return "MEDIUM", score
+    # viral boost for numbers
+    if re.search(r"\d+", text):
+        score += 1
+
+    if score >= 5:
+        priority = "HIGH"
+    elif score >= 2:
+        priority = "MEDIUM"
     else:
-        return "LOW", score
+        priority = "LOW"
+
+    return priority, score
 
 
 # ===============================
-# ✨ SMART SENTENCE PICKER
+# 🔥 LEVEL-2 LITE SMART SUMMARY
+# (RICH DRAFT: 1200–1800 chars)
 # ===============================
-def extract_best_sentences(text, max_chars=600):
+def smart_summary_rich(text):
+    TARGET_MIN = 1200
+    TARGET_MAX = 1800
+
     sentences = re.split(r"[।!?]", text)
     sentences = [clean_text(s) for s in sentences if len(s.strip()) > 30]
 
     if not sentences:
-        return clean_text(text)[:max_chars]
+        return text[:TARGET_MAX]
 
     priority_words = [
         "নিহত","হামলা","বিস্ফোরণ","সংঘর্ষ",
@@ -73,58 +83,69 @@ def extract_best_sentences(text, max_chars=600):
     ]
 
     scored = []
+
     for s in sentences:
-        score = sum(2 for w in priority_words if w in s)
-        score += len(s) / 150
+        score = sum(3 for w in priority_words if w in s)
+        score += len(s) / 100
         scored.append((score, s))
 
-    scored.sort(reverse=True)
+    scored.sort(reverse=True, key=lambda x: x[0])
 
-    result = ""
-    for _, sent in scored:
-        block = sent + "। "
-        if len(result) + len(block) > max_chars:
+    selected = []
+    total_len = 0
+    used = set()
+
+    for score, sent in scored:
+        if sent in used:
+            continue
+
+        block = sent + "।"
+
+        if total_len + len(block) > TARGET_MAX:
+            continue
+
+        selected.append(block)
+        used.add(sent)
+        total_len += len(block)
+
+        if total_len >= TARGET_MIN:
             break
-        result += block
 
-    return result.strip()
+    if not selected:
+        return text[:TARGET_MAX]
+
+    return " ".join(selected)[:TARGET_MAX]
 
 
 # ===============================
-# 🧠 PROFESSIONAL MULTI-SEGMENT
+# PROFESSIONAL MULTI-SEGMENT
 # ===============================
 def build_multi_segment_summary(selected_items):
-    # ✅ YOUR REQUESTED STRATEGY
-    DRAFT_MIN = 1200
-    DRAFT_MAX = 1800
-
     segments = []
-    total_len = 0
 
     for item in selected_items:
         title = clean_text(item["title"])
         body = clean_text(item["summary"])
 
-        short_body = extract_best_sentences(
-            title + " " + body,
-            max_chars=500
-        )
+        rich = smart_summary_rich(title + " " + body)
 
-        segment = f"🔹 {title}\n{short_body}"
+        badge = "🚨 BREAKING" if item["priority"] == "HIGH" else "🔹 UPDATE"
 
-        if total_len + len(segment) > DRAFT_MAX:
-            break
-
+        segment = f"{badge}\n{title}\n{rich}"
         segments.append(segment)
-        total_len += len(segment)
-
-        if total_len >= DRAFT_MIN:
-            break
-
-    if not segments:
-        return "❌ কোনো সংবাদ থেকে সারাংশ তৈরি করা যায়নি।"
 
     return "\n\n".join(segments)
+
+
+# ===============================
+# REMOVE DUPLICATE NEWS
+# ===============================
+def is_duplicate(title, seen_titles):
+    base = title[:60].lower()
+    if base in seen_titles:
+        return True
+    seen_titles.add(base)
+    return False
 
 
 # ===============================
@@ -141,7 +162,6 @@ def home():
     )
 
 
-# ===============================
 @app.route("/add_source", methods=["POST"])
 def add_source():
     url = request.form.get("rss_url")
@@ -164,21 +184,18 @@ def delete_source(index):
 
 
 # ===============================
-# 🚀 FETCH NEWS (STABLE)
+# 🚀 FETCH NEWS (LEVEL-2 LITE)
 # ===============================
 @app.route("/fetch_news")
 def fetch_news():
     global LAST_FETCHED_NEWS
     LAST_FETCHED_NEWS = []
+    seen_titles = set()
 
-    for src in SAVED_SOURCES:
-        try:
+    try:
+        for src in SAVED_SOURCES:
             feed = feedparser.parse(src["url"])
-            keywords = [
-                k.strip().lower()
-                for k in src["keywords"].split(",")
-                if k.strip()
-            ]
+            keywords = [k.strip().lower() for k in src["keywords"].split(",") if k.strip()]
 
             for entry in feed.entries[:40]:
                 title = clean_text(entry.get("title", ""))
@@ -187,18 +204,19 @@ def fetch_news():
                 if not title:
                     continue
 
-                full_text = (title + " " + summary).lower()
-                keyword_match = (
-                    any(k in full_text for k in keywords)
-                    if keywords else True
-                )
+                # duplicate killer
+                if is_duplicate(title, seen_titles):
+                    continue
 
-                priority, score = get_priority(full_text)
+                full_text = (title + " " + summary).lower()
+
+                keyword_match = any(k in full_text for k in keywords) if keywords else True
+
+                priority, viral_score = get_priority_and_viral(full_text)
 
                 if keywords and not keyword_match and priority != "HIGH":
                     continue
 
-                # date safe
                 try:
                     if hasattr(entry, "published_parsed") and entry.published_parsed:
                         date_obj = datetime(*entry.published_parsed[:6])
@@ -210,21 +228,23 @@ def fetch_news():
 
                 LAST_FETCHED_NEWS.append({
                     "title": title,
-                    "summary": summary[:500],
+                    "summary": summary[:400],
                     "source": src["url"],
                     "priority": priority,
-                    "score": score,
+                    "score": viral_score,
                     "date": nice_date
                 })
 
-        except Exception as e:
-            print("Feed error:", e)
+        # 🔥 professional sorting
+        priority_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 
-    priority_order = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
-    LAST_FETCHED_NEWS.sort(
-        key=lambda x: (priority_order.get(x["priority"], 0), x["score"]),
-        reverse=True
-    )
+        LAST_FETCHED_NEWS.sort(
+            key=lambda x: (priority_order.get(x["priority"], 0), x["score"]),
+            reverse=True
+        )
+
+    except Exception as e:
+        print("❌ FETCH ERROR:", e)
 
     return home()
 
@@ -238,6 +258,7 @@ def generate_selected():
         return home()
 
     selected_items = []
+
     for idx in selected_indexes:
         try:
             selected_items.append(LAST_FETCHED_NEWS[int(idx)])
@@ -270,10 +291,10 @@ def finalize_summary():
 
 
 # ===============================
-# TEMPLATE (CLEAN + FIXED)
+# TEMPLATE (CLEAN + PROFESSIONAL)
 # ===============================
 TEMPLATE = """
-<h1>Runner News Dashboard</h1>
+<h1>Runner News Dashboard — Level-2 Lite</h1>
 
 <h2>Add RSS Source</h2>
 <form method="post" action="/add_source">
@@ -304,6 +325,7 @@ TEMPLATE = """
   <p>{{ news.summary }}</p>
   <small>
     Priority: <b>{{ news.priority }}</b> |
+    Viral Score: {{ news.score }} |
     Date: {{ news.date }}
   </small>
 </div>
@@ -315,21 +337,22 @@ TEMPLATE = """
 
 {% if draft_summary %}
 <hr>
-<h2>📝 Edit Draft (1200–1800 chars recommended)</h2>
+<h2>📝 Edit Draft (Recommended)</h2>
 
 <form method="post" action="/finalize_summary">
-  <textarea name="edited_summary" rows="14" style="width:100%;">{{ draft_summary }}</textarea><br><br>
-  <button type="submit">✅ Finalize Summary</button>
+<textarea name="edited_summary" rows="16" style="width:100%;">{{ draft_summary }}</textarea><br><br>
+<button type="submit">✅ Finalize Summary</button>
 </form>
 {% endif %}
 
 {% if final_summary %}
 <hr>
-<h2>📊 Final News Summary (650–900 ideal)</h2>
-<p>{{ final_summary }}</p>
+<h2>📊 Final News Summary</h2>
+<p style="white-space:pre-line;">{{ final_summary }}</p>
 <p><b>Total Characters:</b> {{ final_summary|length }}</p>
 {% endif %}
 """
 
+# ===============================
 if __name__ == "__main__":
     app.run(debug=True)
