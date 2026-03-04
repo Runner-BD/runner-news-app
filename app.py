@@ -282,10 +282,9 @@ TEMPLATE = """
 <p><b>Total Characters:</b> {{ final_summary|length }}</p>
 {% endif %}
 """
-
 import os
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
+    port = int(os.environ.get("PORT", 10000))
     print(f"Starting app on port {port}")
-    app.run(host="0.0.0.0", port=port, debug=False)
+    app.run(host="0.0.0.0", port=port)
